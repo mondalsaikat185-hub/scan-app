@@ -80,18 +80,17 @@ function warp(imageData, corners) {
   try {
     src = matFromImageData(imageData);
     const [tl, tr, br, bl] = corners;
-    const maxW = Math.max(Math.hypot(br.x-bl.x, br.y-bl.y), Math.hypot(tr.x-tl.x, tr.y-tl.y)) | 0;
-    const maxH = Math.max(Math.hypot(tr.x-br.x, tr.y-br.y), Math.hypot(tl.x-bl.x, tl.y-bl.y)) | 0;
+    // কমপক্ষে 1px — degenerate কোণায় 0-size warp WASM ক্র্যাশ করাতে পারে
+    const maxW = Math.max(1, Math.max(Math.hypot(br.x-bl.x, br.y-bl.y), Math.hypot(tr.x-tl.x, tr.y-tl.y)) | 0);
+    const maxH = Math.max(1, Math.max(Math.hypot(tr.x-br.x, tr.y-br.y), Math.hypot(tl.x-bl.x, tl.y-bl.y)) | 0);
     srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]);
     dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW,0,maxW,maxH,0,maxH]);
     M = cv.getPerspectiveTransform(srcTri, dstTri);
     dst = new cv.Mat();
     cv.warpPerspective(src, dst, M, new cv.Size(maxW, maxH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    let rgba = new cv.Mat();
-    cv.cvtColor(dst, rgba, cv.COLOR_RGBA2RGBA); // নিশ্চিত 4-channel
-    const out = { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(rgba.data) };
-    rgba.delete();
-    return out;
+    // src RGBA (CV_8UC4), তাই dst-ও RGBA — সরাসরি data নেওয়া যায়
+    // (আগের cv.COLOR_RGBA2RGBA constant-টির অস্তিত্বই নেই — সেটিই warp fail-এর কারণ ছিল)
+    return { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(dst.data) };
   } finally {
     [src,dst,srcTri,dstTri,M].forEach(m => { if (m) m.delete(); });
   }
