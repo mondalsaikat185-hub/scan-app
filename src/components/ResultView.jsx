@@ -4,7 +4,7 @@ import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
 export default function ResultView({ warpedCanvas, onReset, onAddPage }) {
-  const [filter, setFilter] = useState('scan');
+  const [filter, setFilter] = useState('magic');
   const [finalCanvas, setFinalCanvas] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const containerRef = useRef(null);
@@ -69,6 +69,7 @@ export default function ResultView({ warpedCanvas, onReset, onAddPage }) {
       <h2 className="editor-title">Enhance & Save</h2>
       
       <div className="filter-group">
+        <button className={`filter-btn ${filter === 'magic' ? 'active' : ''}`} onClick={() => setFilter('magic')}>Color</button>
         <button className={`filter-btn ${filter === 'original' ? 'active' : ''}`} onClick={() => setFilter('original')}>Original</button>
         <button className={`filter-btn ${filter === 'grayscale' ? 'active' : ''}`} onClick={() => setFilter('grayscale')}>Grayscale</button>
         <button className={`filter-btn ${filter === 'scan' ? 'active' : ''}`} onClick={() => setFilter('scan')}>B&W Scan</button>

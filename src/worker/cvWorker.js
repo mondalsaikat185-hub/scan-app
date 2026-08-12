@@ -31,46 +31,110 @@ function matFromImageData(imageData) {
 
 function detectEdges(imageData) {
   const cv = self.cv;
-  let src = null, gray = null, blur = null, edges = null, dil = null,
-      contours = null, hier = null, poly = null, best = null;
-  try {
-    src = matFromImageData(imageData);
-    gray = new cv.Mat(); blur = new cv.Mat(); edges = new cv.Mat();
-    dil = new cv.Mat(); contours = new cv.MatVector(); hier = new cv.Mat(); poly = new cv.Mat();
+  const W = imageData.width, H = imageData.height;
 
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-    cv.Canny(blur, edges, 75, 200);
-    const M = cv.Mat.ones(3, 3, cv.CV_8U);
-    cv.dilate(edges, dil, M, new cv.Point(-1, -1), 1, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-    M.delete();
-    cv.findContours(dil, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  // --- ছোট কপিতে কাজ (দ্রুত + noise কম) ---
+  const DETECT_DIM = 1000;
+  const scale = Math.min(1, DETECT_DIM / Math.max(W, H));
+  let full = null, small = null, gray = null;
+  const candidates = []; // {pts:[4], score}
 
-    let maxArea = 0;
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const area = cv.contourArea(cnt);
-      if (area > 1000) {
-        cv.approxPolyDP(cnt, poly, 0.02 * cv.arcLength(cnt, true), true);
-        if (poly.rows === 4 && area > maxArea) {
-          maxArea = area;
-          if (best) best.delete();
-          best = poly.clone();
+  const quadScore = (pts, imgArea) => {
+    // area বড় + কোণ ~90° হলে score বেশি
+    let area = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i], b = pts[(i + 1) % 4];
+      area += a.x * b.y - b.x * a.y;
+    }
+    area = Math.abs(area) / 2;
+    const areaRatio = area / imgArea;
+    if (areaRatio < 0.12 || areaRatio > 0.99) return 0; // খুব ছোট/পুরো ফ্রেম বাদ
+    let angPenalty = 0;
+    for (let i = 0; i < 4; i++) {
+      const p0 = pts[(i + 3) % 4], p1 = pts[i], p2 = pts[(i + 1) % 4];
+      const v1 = { x: p0.x - p1.x, y: p0.y - p1.y }, v2 = { x: p2.x - p1.x, y: p2.y - p1.y };
+      const dot = v1.x * v2.x + v1.y * v2.y;
+      const n = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1;
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot / n))) * 180 / Math.PI;
+      angPenalty += Math.abs(90 - ang);
+    }
+    return areaRatio * Math.max(0, 1 - angPenalty / 160);
+  };
+
+  const harvest = (binaryMat, imgArea) => {
+    let contours = null, hier = null;
+    try {
+      contours = new cv.MatVector(); hier = new cv.Mat();
+      cv.findContours(binaryMat, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        if (cv.contourArea(cnt) > imgArea * 0.1) {
+          const hull = new cv.Mat();
+          cv.convexHull(cnt, hull, false, true);
+          const poly = new cv.Mat();
+          cv.approxPolyDP(hull, poly, 0.02 * cv.arcLength(hull, true), true);
+          if (poly.rows === 4) {
+            const pts = [];
+            for (let k = 0; k < 4; k++) pts.push({ x: poly.data32S[k * 2], y: poly.data32S[k * 2 + 1] });
+            const s = quadScore(pts, imgArea);
+            if (s > 0) candidates.push({ pts, score: s });
+          } else if (poly.rows > 4) {
+            // fallback প্রার্থী: ঘোরানো bounding box
+            const rr = cv.minAreaRect(cnt);
+            const v = cv.RotatedRect.points(rr);
+            const pts = v.map(p => ({ x: p.x, y: p.y }));
+            const s = quadScore(pts, imgArea) * 0.8; // সরাসরি 4-gon-এর চেয়ে কম প্রাধান্য
+            if (s > 0) candidates.push({ pts, score: s });
+          }
+          poly.delete(); hull.delete();
         }
+        cnt.delete();
       }
-      cnt.delete();
-    }
+    } finally { if (contours) contours.delete(); if (hier) hier.delete(); }
+  };
 
-    if (best) {
-      const pts = [];
-      for (let i = 0; i < 4; i++) pts.push({ x: best.data32S[i * 2], y: best.data32S[i * 2 + 1] });
-      best.delete(); best = null;
-      return orderPoints(pts);
+  try {
+    full = matFromImageData(imageData);
+    small = new cv.Mat();
+    if (scale < 1) cv.resize(full, small, new cv.Size(Math.round(W * scale), Math.round(H * scale)), 0, 0, cv.INTER_AREA);
+    else full.copyTo(small);
+    gray = new cv.Mat();
+    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY, 0);
+    const imgArea = small.cols * small.rows;
+
+    // --- পদ্ধতি ১: blur + Canny (মাঝারি) + dilate ---
+    let blur = new cv.Mat(), edges = new cv.Mat(), dil = new cv.Mat();
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+    cv.Canny(blur, edges, 50, 150);
+    const M = cv.Mat.ones(3, 3, cv.CV_8U);
+    cv.dilate(edges, dil, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+    harvest(dil, imgArea);
+
+    // --- পদ্ধতি ২: Canny কড়া threshold ---
+    cv.Canny(blur, edges, 100, 250);
+    cv.dilate(edges, dil, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+    harvest(dil, imgArea);
+
+    // --- পদ্ধতি ৩: Otsu binary (উজ্জ্বল কাগজ vs গাঢ় ব্যাকগ্রাউন্ড) ---
+    let bin = new cv.Mat();
+    cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    harvest(bin, imgArea);
+
+    M.delete(); blur.delete(); edges.delete(); dil.delete(); bin.delete();
+
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.score - a.score);
+      const bestPts = orderPoints(candidates[0].pts).map(p => ({
+        x: Math.max(0, Math.min(W, p.x / scale)),
+        y: Math.max(0, Math.min(H, p.y / scale)),
+      }));
+      return bestPts;
     }
-    const w = imageData.width, h = imageData.height, mx = w * 0.05, my = h * 0.05;
-    return [{x:mx,y:my},{x:w-mx,y:my},{x:w-mx,y:h-my},{x:mx,y:h-my}];
+    // কিছুই না পেলে — ৫% মার্জিনে default
+    const mx = W * 0.05, my = H * 0.05;
+    return [{x:mx,y:my},{x:W-mx,y:my},{x:W-mx,y:H-my},{x:mx,y:H-my}];
   } finally {
-    [src,gray,blur,edges,dil,contours,hier,poly,best].forEach(m => { if (m) m.delete(); });
+    [full, small, gray].forEach(m => { if (m) m.delete(); });
   }
 }
 
@@ -96,9 +160,51 @@ function warp(imageData, corners) {
   }
 }
 
+function magicColor(imageData) {
+  const cv = self.cv;
+  let src = null, rgb = null, channels = null, bg = null, out = null, rgba = null, merged = null;
+  try {
+    src = matFromImageData(imageData);
+    rgb = new cv.Mat();
+    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB, 0);
+
+    channels = new cv.MatVector();
+    cv.split(rgb, channels);
+
+    merged = new cv.MatVector();
+    const tmp = [];
+    for (let i = 0; i < 3; i++) {
+      const ch = channels.get(i);
+      const blur = new cv.Mat();
+      // বড় kernel — আলোর প্যাটার্ন ধরে (লেখা নয়)
+      cv.GaussianBlur(ch, blur, new cv.Size(0, 0), 25, 25, cv.BORDER_DEFAULT);
+      const norm = new cv.Mat();
+      // ch/blur * 235 → ব্যাকগ্রাউন্ড ≈ সাদা (235), রং সংরক্ষিত
+      cv.divide(ch, blur, norm, 235);
+      merged.push_back(norm);
+      tmp.push(ch, blur, norm);
+    }
+
+    out = new cv.Mat();
+    cv.merge(merged, out);
+    // হালকা কনট্রাস্ট: alpha=1.15, beta=-12
+    out.convertTo(out, -1, 1.15, -12);
+
+    rgba = new cv.Mat();
+    cv.cvtColor(out, rgba, cv.COLOR_RGB2RGBA, 0);
+    const result = { width: rgba.cols, height: rgba.rows, data: new Uint8ClampedArray(rgba.data) };
+    tmp.forEach(m => m.delete());
+    return result;
+  } finally {
+    [src, rgb, channels, bg, out, rgba, merged].forEach(m => { if (m) m.delete(); });
+  }
+}
+
 function applyFilter(imageData, filter) {
   const cv = self.cv;
   if (filter === 'original') return imageData;
+  if (filter === 'magic') return magicColor(imageData);
+  
   let src = null, dst = null, rgba = null;
   try {
     src = matFromImageData(imageData);

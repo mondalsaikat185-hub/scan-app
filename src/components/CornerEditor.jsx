@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './CornerEditor.css';
 
-const HANDLE_RADIUS = 20;
+const HANDLE_RADIUS = 24;
 
 export default function CornerEditor({ imageCanvas, initialCorners, onComplete }) {
   const containerRef = useRef(null);
@@ -73,6 +73,39 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
       ctx.strokeStyle = '#1e293b';
       ctx.stroke();
     });
+
+    // ম্যাগনিফায়ার — কোনো কোণা ড্র্যাগ হলে
+    if (draggingIdx !== -1) {
+      const pt = corners[draggingIdx];
+      const LOUPE = 120;         // লুপের সাইজ (ডিসপ্লে px)
+      const ZOOM = 2.5;
+      const srcSize = LOUPE / ZOOM / scale;   // সোর্স ইমেজে কতটা অংশ
+      // লুপ বসবে উপরের যে কোণে আঙুল নেই সেখানে
+      const nearLeft = (pt.x * scale) < canvas.width / 2;
+      const lx = nearLeft ? canvas.width - LOUPE - 10 : 10;
+      const ly = 10;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(lx + LOUPE/2, ly + LOUPE/2, LOUPE/2, 0, 2*Math.PI);
+      ctx.clip();
+      ctx.drawImage(
+        imageCanvas,
+        pt.x - srcSize/2, pt.y - srcSize/2, srcSize, srcSize,  // সোর্স (পুরো রেজোলিউশন)
+        lx, ly, LOUPE, LOUPE                                    // গন্তব্য
+      );
+      // ক্রসহেয়ার
+      ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(lx + LOUPE/2 - 12, ly + LOUPE/2); ctx.lineTo(lx + LOUPE/2 + 12, ly + LOUPE/2);
+      ctx.moveTo(lx + LOUPE/2, ly + LOUPE/2 - 12); ctx.lineTo(lx + LOUPE/2, ly + LOUPE/2 + 12);
+      ctx.stroke();
+      ctx.restore();
+      // লুপের বর্ডার
+      ctx.beginPath();
+      ctx.arc(lx + LOUPE/2, ly + LOUPE/2, LOUPE/2, 0, 2*Math.PI);
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.stroke();
+    }
   }, [corners, scale, draggingIdx, imageCanvas]);
 
   // Input Handling (Mouse & Touch)

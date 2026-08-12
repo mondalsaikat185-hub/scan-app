@@ -17,14 +17,15 @@ export default function ImageInput({ onImageLoaded }) {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-      // Resize logic (max width ~1500px)
-      const MAX_WIDTH = 1500;
+      // Resize logic (max dimension ~2600px)
+      const MAX_DIM = 2600;
       let width = img.width;
       let height = img.height;
-
-      if (width > MAX_WIDTH) {
-        height = Math.round((height * MAX_WIDTH) / width);
-        width = MAX_WIDTH;
+      const longSide = Math.max(width, height);
+      if (longSide > MAX_DIM) {
+        const s = MAX_DIM / longSide;
+        width = Math.round(width * s);
+        height = Math.round(height * s);
       }
 
       canvas.width = width;
