@@ -167,11 +167,17 @@ function App() {
 
 
   if (cvError) {
-    return <div className="app-container"><p style={{color: 'red'}}>Error loading OpenCV.js.</p></div>;
+    return (
+      <div className="app-container error-screen" style={{textAlign: 'center', paddingTop: '40px'}}>
+        <h2>লোড করা যায়নি</h2>
+        <p style={{marginBottom: '20px'}}>OpenCV ইঞ্জিন লোড হতে পারেনি — ইন্টারনেট কানেকশন ধীর বা বাধাপ্রাপ্ত হতে পারে।</p>
+        <button className="btn primary-btn" onClick={() => window.location.reload()}>আবার চেষ্টা করুন</button>
+      </div>
+    );
   }
 
   if (!cvReady) {
-    return <Loader message="Initializing AI Core..." />;
+    return <Loader message="ইঞ্জিন প্রস্তুত হচ্ছে… প্রথমবার ~12MB ডাউনলোড হচ্ছে, একটু সময় লাগতে পারে।" />;
   }
 
   return (

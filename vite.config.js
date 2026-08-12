@@ -8,10 +8,27 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
-      // OpenCV.js is large (~11MB), so increase Workbox limit to 15MB
+      // OpenCV.js is large (~11MB) - we exclude it from precache to avoid double downloads
+      // and use a runtime cache strategy instead
       workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        globIgnores: ['**/opencv.js', '**/*.wasm'],
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
-        globPatterns: ['**/*.{js,css,html,svg,png,wasm,ico}']
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.endsWith('/opencv.js') || url.pathname.endsWith('.wasm'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'opencv-cache',
+              expiration: {
+                maxEntries: 4,
+                maxAgeSeconds: 60 * 60 * 24 * 90, // 90 days
+              },
+              cacheableResponse: { statuses: [0, 200] },
+              rangeRequests: true,
+            },
+          },
+        ],
       },
       manifest: {
         name: 'Scan App',
