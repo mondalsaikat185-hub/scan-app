@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { loadOpenCV } from './lib/opencvLoader';
-import { detectEdges } from './lib/detectEdges';
-import { warp } from './lib/warp';
+import { initCV, detectEdges, warpCanvas } from './lib/cvClient';
 import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
@@ -30,10 +28,11 @@ function App() {
   const [imageCanvas, setImageCanvas] = useState(null);
   const [initialCorners, setInitialCorners] = useState(null);
   const [warpedCanvas, setWarpedCanvas] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    // Load OpenCV
-    loadOpenCV()
+    // Load OpenCV via Web Worker
+    initCV()
       .then(() => setCvReady(true))
       .catch((err) => {
         console.error(err);
@@ -101,17 +100,33 @@ function App() {
   };
 
   // --- Scan Flow Actions ---
-  const handleImageLoaded = (canvas) => {
+  const handleImageLoaded = async (canvas) => {
     setImageCanvas(canvas);
-    const corners = detectEdges(window.cv, canvas);
-    setInitialCorners(corners);
-    setStep('crop');
+    setBusy(true);
+    try {
+      const corners = await detectEdges(canvas);
+      setInitialCorners(corners);
+      setStep('crop');
+    } catch (err) {
+      console.error(err);
+      alert('Error detecting edges');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleCornersComplete = (finalCorners) => {
-    const warped = warp(window.cv, imageCanvas, finalCorners);
-    setWarpedCanvas(warped);
-    setStep('enhance');
+  const handleCornersComplete = async (finalCorners) => {
+    setBusy(true);
+    try {
+      const warped = await warpCanvas(imageCanvas, finalCorners);
+      setWarpedCanvas(warped);
+      setStep('enhance');
+    } catch (err) {
+      console.error(err);
+      alert('Error warping image');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleAddPage = (pageObj) => {
@@ -207,7 +222,6 @@ function App() {
 
       {step === 'enhance' && (
         <ResultView 
-          cv={window.cv}
           warpedCanvas={warpedCanvas}
           onAddPage={handleAddPage}
           onReset={handleCancelScan}
@@ -223,6 +237,17 @@ function App() {
           onExport={(pages, name) => handleExportPdf(pages, name)}
           onBack={handleBackToLibrary}
         />
+      )}
+      
+      {busy && (
+        <div style={{
+          position: 'fixed', top:0, left:0, right:0, bottom:0,
+          background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'white', fontSize: '1.2rem', fontWeight: 'bold'
+        }}>
+          Processing...
+        </div>
       )}
     </div>
   );

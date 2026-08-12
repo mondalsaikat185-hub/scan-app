@@ -1,21 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { applyFilter } from '../lib/enhance';
 import { canvasToBlob } from '../lib/canvasUtils';
+import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
-export default function ResultView({ cv, warpedCanvas, onReset, onAddPage }) {
+export default function ResultView({ warpedCanvas, onReset, onAddPage }) {
   const [filter, setFilter] = useState('scan');
   const [finalCanvas, setFinalCanvas] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
 
   useEffect(() => {
-    if (!warpedCanvas) return;
-    // Apply filter synchronously or wrap in timeout to not block UI immediately
-    const result = applyFilter(cv, warpedCanvas, filter);
-    setFinalCanvas(result);
-  }, [filter, warpedCanvas, cv]);
+    let cancelled = false;
+    (async () => {
+      if (!warpedCanvas) return;
+      setIsProcessing(true);
+      try {
+        const result = await filterCanvas(warpedCanvas, filter);
+        if (!cancelled) setFinalCanvas(result);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (!cancelled) setIsProcessing(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [filter, warpedCanvas]);
 
   useEffect(() => {
     if (!finalCanvas || !canvasRef.current || !containerRef.current) return;
@@ -35,7 +45,7 @@ export default function ResultView({ cv, warpedCanvas, onReset, onAddPage }) {
 
   const handleAddPage = async () => {
     if (!finalCanvas) return;
-    setIsGenerating(true);
+    setIsProcessing(true);
     try {
       const blob = await canvasToBlob(finalCanvas, filter);
       const page = {
@@ -50,7 +60,7 @@ export default function ResultView({ cv, warpedCanvas, onReset, onAddPage }) {
       console.error("Failed to generate Blob", err);
       alert("Failed to process image.");
     } finally {
-      setIsGenerating(false);
+      setIsProcessing(false);
     }
   };
 
@@ -69,12 +79,11 @@ export default function ResultView({ cv, warpedCanvas, onReset, onAddPage }) {
       </div>
 
       <div className="action-bar">
-        <button className="btn secondary-btn" onClick={onReset} disabled={isGenerating}>
+        <button className="btn secondary-btn" onClick={onReset} disabled={isProcessing}>
           Cancel
         </button>
-        <button className="btn primary-btn" onClick={handleAddPage} disabled={isGenerating}>
-          <span className="icon">➕</span>
-          {isGenerating ? 'Processing...' : 'Add to document'}
+        <button className="btn primary-btn" onClick={handleAddPage} disabled={isProcessing}>
+          <span className="icon">✓</span> {isProcessing ? 'Processing...' : 'Add to document'}
         </button>
       </div>
     </div>
