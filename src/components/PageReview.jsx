@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { sharePdf } from '../lib/share';
 import './PageReview.css';
 
 export default function PageReview({ 
@@ -53,6 +54,19 @@ export default function PageReview({
     isGenerating.current = true;
     try {
       await onExport(workingDoc.pages, name);
+    } finally {
+      isGenerating.current = false;
+    }
+  };
+
+  const handleShare = async () => {
+    if (isGenerating.current || workingDoc.pages.length === 0) return;
+    isGenerating.current = true;
+    try {
+      await sharePdf(workingDoc.pages, name);
+    } catch (err) {
+      console.error('Share error', err);
+      alert('Could not share the document.');
     } finally {
       isGenerating.current = false;
     }
@@ -122,6 +136,14 @@ export default function PageReview({
           disabled={workingDoc.pages.length === 0}
         >
           Export PDF
+        </button>
+        
+        <button 
+          className="btn primary-btn" 
+          onClick={handleShare}
+          disabled={workingDoc.pages.length === 0}
+        >
+          <span className="icon">🔗</span> Share
         </button>
       </div>
     </div>

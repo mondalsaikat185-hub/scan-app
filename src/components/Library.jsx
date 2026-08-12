@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import './Library.css';
 
-export default function Library({ docs, onNewScan, onOpen, onExport, onDelete }) {
+export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare }) {
   const [thumbnails, setThumbnails] = useState({});
 
   useEffect(() => {
@@ -62,6 +62,7 @@ export default function Library({ docs, onNewScan, onOpen, onExport, onDelete })
                 <div className="doc-actions">
                   <button className="btn-small" onClick={() => onOpen(doc)}>Open</button>
                   <button className="btn-small" onClick={() => onExport(doc.pages, doc.name)}>Export PDF</button>
+                  <button className="btn-small" onClick={() => onShare(doc.pages, doc.name)}>Share</button>
                   <button className="btn-small danger" onClick={() => onDelete(doc.id)}>Delete</button>
                 </div>
               </div>

@@ -4,6 +4,7 @@ import { detectEdges } from './lib/detectEdges';
 import { warp } from './lib/warp';
 import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
+import { sharePdf } from './lib/share';
 
 import Loader from './components/Loader';
 import ImageInput from './components/ImageInput';
@@ -90,6 +91,15 @@ function App() {
     }
   };
 
+  const handleShareDoc = async (pages, name) => {
+    try {
+      await sharePdf(pages, name);
+    } catch (err) {
+      console.error(err);
+      alert('Could not share.');
+    }
+  };
+
   // --- Scan Flow Actions ---
   const handleImageLoaded = (canvas) => {
     setImageCanvas(canvas);
@@ -173,6 +183,7 @@ function App() {
           onOpen={handleOpenDoc}
           onExport={handleExportPdf}
           onDelete={handleDeleteDoc}
+          onShare={handleShareDoc}
         />
       )}
 
