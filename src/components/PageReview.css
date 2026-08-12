@@ -1,0 +1,148 @@
+.page-review-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 20px;
+  background-color: #0f172a;
+  color: #f8fafc;
+  box-sizing: border-box;
+}
+
+.header {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.doc-name-input {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid #334155;
+  color: white;
+  font-size: 1.8rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 8px;
+  width: 100%;
+  max-width: 400px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.doc-name-input:focus {
+  border-bottom-color: #3b82f6;
+}
+
+.pages-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 20px;
+  margin-bottom: 80px; /* space for bottom bar */
+  align-content: start;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: #94a3b8;
+  padding: 40px;
+}
+
+.page-card {
+  background-color: #1e293b;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #0f172a;
+}
+
+.page-num {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+
+.page-img-wrapper {
+  aspect-ratio: 3/4;
+  width: 100%;
+  overflow: hidden;
+  background-color: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.page-img-wrapper img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.page-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #0f172a;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background-color: #334155;
+  color: white;
+}
+
+.icon-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.delete-btn {
+  color: #ef4444;
+}
+.delete-btn:hover {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+}
+
+.page-review-container .bottom-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(10px);
+  padding: 16px 20px;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  z-index: 10;
+  border-top: 1px solid #1e293b;
+}
+
+.page-review-container .bottom-bar .btn {
+  flex: 1;
+  min-width: 120px;
+  max-width: 200px;
+  font-size: 1rem;
+  padding: 12px;
+}

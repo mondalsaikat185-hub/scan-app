@@ -1,0 +1,54 @@
+.result-view-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100vh;
+  padding: 20px;
+  background-color: #0f172a;
+  color: #f8fafc;
+  box-sizing: border-box;
+}
+
+.filter-group {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  background-color: #1e293b;
+  padding: 6px;
+  border-radius: 12px;
+}
+
+.filter-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.filter-btn:hover {
+  color: #f8fafc;
+}
+
+.filter-btn.active {
+  background-color: #3b82f6;
+  color: white;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.action-bar {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+  max-width: 400px;
+  padding-top: 20px;
+}
+
+.action-bar .btn {
+  flex: 1;
+}
