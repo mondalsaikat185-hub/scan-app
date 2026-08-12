@@ -29,6 +29,7 @@ function App() {
   const [initialCorners, setInitialCorners] = useState(null);
   const [warpedCanvas, setWarpedCanvas] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [pendingQueue, setPendingQueue] = useState([]);  // মাল্টি-সিলেক্টের অপেক্ষমাণ ছবি
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -100,7 +101,8 @@ function App() {
   };
 
   // --- Scan Flow Actions ---
-  const handleImageLoaded = async (canvas) => {
+  // একটা canvas নিয়ে ডিটেকশন চালিয়ে crop স্ক্রিনে যায়
+  const startCropFor = async (canvas) => {
     setImageCanvas(canvas);
     setBusy(true);
     try {
@@ -113,6 +115,13 @@ function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // মাল্টি-সিলেক্ট: প্রথমটা এখনই, বাকিগুলো কিউতে — এক এক করে আসবে
+  const handleImagesLoaded = async (canvases) => {
+    const [first, ...rest] = canvases;
+    setPendingQueue(rest);
+    await startCropFor(first);
   };
 
   const handleCornersComplete = async (finalCorners) => {
@@ -137,20 +146,28 @@ function App() {
       updatedAt: Date.now()
     };
     setWorkingDoc(newDoc);
-    
+
     // Clear transient states
     setImageCanvas(null);
     setInitialCorners(null);
     setWarpedCanvas(null);
-    
-    setStep('pages');
+
+    // কিউতে আরও ছবি থাকলে পরেরটা শুরু করো, নাহলে pages স্ক্রিন
+    if (pendingQueue.length > 0) {
+      const [next, ...rest] = pendingQueue;
+      setPendingQueue(rest);
+      startCropFor(next);
+    } else {
+      setStep('pages');
+    }
   };
 
   const handleCancelScan = () => {
     setImageCanvas(null);
     setInitialCorners(null);
     setWarpedCanvas(null);
-    
+    setPendingQueue([]);  // Cancel করলে কিউও খালি
+
     // If the document has pages, go back to pages view, else library
     if (workingDoc.pages.length > 0) {
       setStep('pages');
@@ -209,7 +226,7 @@ function App() {
       )}
 
       {step === 'input' && (
-        <ImageInput onImageLoaded={handleImageLoaded} />
+        <ImageInput onImagesLoaded={handleImagesLoaded} />
       )}
       
       {step === 'crop' && (

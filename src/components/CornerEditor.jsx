@@ -109,28 +109,34 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
   }, [corners, scale, draggingIdx, imageCanvas]);
 
   // Input Handling (Mouse & Touch)
+  // গুরুত্বপূর্ণ: CSS canvas-কে ছোট করে দেখাতে পারে (max-width:100%),
+  // তাই rect (দৃশ্যমান) আর canvas.width (আসল) — দুটোর অনুপাত ধরতেই হবে।
   const getMousePos = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const cssX = rect.width > 0 ? canvas.width / rect.width : 1;
+    const cssY = rect.height > 0 ? canvas.height / rect.height : 1;
     return {
-      x: (clientX - rect.left) / scale,
-      y: (clientY - rect.top) / scale
+      x: ((clientX - rect.left) * cssX) / scale,
+      y: ((clientY - rect.top) * cssY) / scale,
+      cssX,
     };
   };
 
   const handlePointerDown = (e) => {
     e.preventDefault();
     const pos = getMousePos(e);
-    
-    // Find closest handle
+
+    // Find closest handle — hit area দৃশ্যমান পিক্সেলের হিসাবে (~44px টাচ টার্গেট)
     let closestIdx = -1;
     let minDist = Infinity;
-    
+    const hitRadius = (HANDLE_RADIUS * 2 * pos.cssX) / scale;
+
     corners.forEach((pt, i) => {
       const dist = Math.hypot(pt.x - pos.x, pt.y - pos.y);
-      // Increased hit area by dividing HANDLE_RADIUS by scale to map it to real image coordinates
-      if (dist < (HANDLE_RADIUS * 2) / scale && dist < minDist) {
+      if (dist < hitRadius && dist < minDist) {
         minDist = dist;
         closestIdx = i;
       }
@@ -139,6 +145,15 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
     if (closestIdx !== -1) {
       setDraggingIdx(closestIdx);
     }
+  };
+
+  const handleReset = () => {
+    const w = imageCanvas.width, h = imageCanvas.height;
+    const mx = w * 0.02, my = h * 0.02;
+    setCorners([
+      { x: mx, y: my }, { x: w - mx, y: my },
+      { x: w - mx, y: h - my }, { x: mx, y: h - my },
+    ]);
   };
 
   const handlePointerMove = (e) => {
@@ -179,6 +194,9 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
       </div>
 
       <div className="bottom-bar">
+        <button className="btn secondary-btn" onClick={handleReset}>
+          Reset
+        </button>
         <button className="btn primary-btn next-btn" onClick={() => onComplete(corners)}>
           Next <span className="icon">→</span>
         </button>

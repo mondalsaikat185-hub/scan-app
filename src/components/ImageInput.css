@@ -83,3 +83,10 @@
 .hidden-input {
   display: none;
 }
+
+.hint-text {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-top: 14px;
+  text-align: center;
+}

@@ -37,9 +37,11 @@ function detectEdges(imageData) {
   const DETECT_DIM = 1000;
   const scale = Math.min(1, DETECT_DIM / Math.max(W, H));
   let full = null, small = null, gray = null;
+  let smallW = 0, smallH = 0;
   const candidates = []; // {pts:[4], score}
 
-  const quadScore = (pts, imgArea) => {
+  const quadScore = (ptsIn, imgArea, imgW, imgH) => {
+    const pts = orderPoints(ptsIn);
     // area বড় + কোণ ~90° হলে score বেশি
     let area = 0;
     for (let i = 0; i < 4; i++) {
@@ -48,7 +50,21 @@ function detectEdges(imageData) {
     }
     area = Math.abs(area) / 2;
     const areaRatio = area / imgArea;
-    if (areaRatio < 0.12 || areaRatio > 0.99) return 0; // খুব ছোট/পুরো ফ্রেম বাদ
+    if (areaRatio < 0.15 || areaRatio > 0.99) return 0; // খুব ছোট/পুরো ফ্রেম বাদ
+
+    // ডকুমেন্ট প্রায় সবসময় ছবির কেন্দ্র ঢেকে রাখে — কেন্দ্র quad-এর ভেতরে না থাকলে বাদ
+    // (এতে "ভীষণ ছোট" ভুল ডিটেকশন দূর হয়)
+    const cx = imgW / 2, cy = imgH / 2;
+    let sign = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i], b = pts[(i + 1) % 4];
+      const cross = (b.x - a.x) * (cy - a.y) - (b.y - a.y) * (cx - a.x);
+      if (cross !== 0) {
+        if (sign === 0) sign = Math.sign(cross);
+        else if (Math.sign(cross) !== sign) return 0; // কেন্দ্র বাইরে
+      }
+    }
+
     let angPenalty = 0;
     for (let i = 0; i < 4; i++) {
       const p0 = pts[(i + 3) % 4], p1 = pts[i], p2 = pts[(i + 1) % 4];
@@ -58,7 +74,15 @@ function detectEdges(imageData) {
       const ang = Math.acos(Math.max(-1, Math.min(1, dot / n))) * 180 / Math.PI;
       angPenalty += Math.abs(90 - ang);
     }
-    return areaRatio * Math.max(0, 1 - angPenalty / 160);
+    let s = areaRatio * Math.max(0, 1 - angPenalty / 160);
+
+    // প্রায় পুরো-ফ্রেম quad (সব কোণা ছবির কোণার ৩%-এর মধ্যে) = আসলে কিছু পায়নি — কম প্রাধান্য
+    const eps = Math.max(imgW, imgH) * 0.03;
+    const nearFrame = pts.every(p =>
+      (p.x < eps || p.x > imgW - eps) && (p.y < eps || p.y > imgH - eps));
+    if (nearFrame) s *= 0.5;
+
+    return s;
   };
 
   const harvest = (binaryMat, imgArea) => {
@@ -76,14 +100,14 @@ function detectEdges(imageData) {
           if (poly.rows === 4) {
             const pts = [];
             for (let k = 0; k < 4; k++) pts.push({ x: poly.data32S[k * 2], y: poly.data32S[k * 2 + 1] });
-            const s = quadScore(pts, imgArea);
+            const s = quadScore(pts, imgArea, smallW, smallH);
             if (s > 0) candidates.push({ pts, score: s });
           } else if (poly.rows > 4) {
             // fallback প্রার্থী: ঘোরানো bounding box
             const rr = cv.minAreaRect(cnt);
             const v = cv.RotatedRect.points(rr);
             const pts = v.map(p => ({ x: p.x, y: p.y }));
-            const s = quadScore(pts, imgArea) * 0.8; // সরাসরি 4-gon-এর চেয়ে কম প্রাধান্য
+            const s = quadScore(pts, imgArea, smallW, smallH) * 0.8; // সরাসরি 4-gon-এর চেয়ে কম প্রাধান্য
             if (s > 0) candidates.push({ pts, score: s });
           }
           poly.delete(); hull.delete();
@@ -101,6 +125,7 @@ function detectEdges(imageData) {
     gray = new cv.Mat();
     cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY, 0);
     const imgArea = small.cols * small.rows;
+    smallW = small.cols; smallH = small.rows;
 
     // --- পদ্ধতি ১: blur + Canny (মাঝারি) + dilate ---
     let blur = new cv.Mat(), edges = new cv.Mat(), dil = new cv.Mat();
@@ -173,16 +198,25 @@ function magicColor(imageData) {
 
     merged = new cv.MatVector();
     const tmp = [];
+    // ব্যাকগ্রাউন্ড হিসাব ১/৪ সাইজে (≈১৬x দ্রুত), blur ছবির মাপের অনুপাতে —
+    // ফলে বড় ছবিতেও আলোর প্যাটার্ন ঠিক ধরা পড়ে, লেখা ফিকে হয় না
+    const q = 0.25;
+    const qW = Math.max(1, Math.round(rgb.cols * q));
+    const qH = Math.max(1, Math.round(rgb.rows * q));
+    const sigmaQ = Math.max(8, Math.round(Math.max(qW, qH) / 40));
     for (let i = 0; i < 3; i++) {
       const ch = channels.get(i);
+      const chSmall = new cv.Mat();
+      cv.resize(ch, chSmall, new cv.Size(qW, qH), 0, 0, cv.INTER_AREA);
+      const blurSmall = new cv.Mat();
+      cv.GaussianBlur(chSmall, blurSmall, new cv.Size(0, 0), sigmaQ, sigmaQ, cv.BORDER_DEFAULT);
       const blur = new cv.Mat();
-      // বড় kernel — আলোর প্যাটার্ন ধরে (লেখা নয়)
-      cv.GaussianBlur(ch, blur, new cv.Size(0, 0), 25, 25, cv.BORDER_DEFAULT);
+      cv.resize(blurSmall, blur, new cv.Size(rgb.cols, rgb.rows), 0, 0, cv.INTER_LINEAR);
       const norm = new cv.Mat();
       // ch/blur * 235 → ব্যাকগ্রাউন্ড ≈ সাদা (235), রং সংরক্ষিত
       cv.divide(ch, blur, norm, 235);
       merged.push_back(norm);
-      tmp.push(ch, blur, norm);
+      tmp.push(ch, chSmall, blurSmall, blur, norm);
     }
 
     out = new cv.Mat();

@@ -1,47 +1,54 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import './ImageInput.css';
 
-export default function ImageInput({ onImageLoaded }) {
-  const cameraInputRef = useRef(null);
-  const galleryInputRef = useRef(null);
+const MAX_DIM = 2600;
 
-  const handleImageChange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
+// একটা File → রিসাইজ করা canvas
+function fileToCanvas(file) {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
-
     img.onload = () => {
-      // Create a canvas to draw the image
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-      // Resize logic (max dimension ~2600px)
-      const MAX_DIM = 2600;
-      let width = img.width;
-      let height = img.height;
+      let width = img.width, height = img.height;
       const longSide = Math.max(width, height);
       if (longSide > MAX_DIM) {
         const s = MAX_DIM / longSide;
         width = Math.round(width * s);
         height = Math.round(height * s);
       }
-
       canvas.width = width;
       canvas.height = height;
-
-      // Draw image to canvas
       ctx.drawImage(img, 0, 0, width, height);
-
-      // Free the object URL memory
       URL.revokeObjectURL(url);
-
-      // Pass the canvas back to parent
-      onImageLoaded(canvas);
+      resolve(canvas);
     };
-
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not load image')); };
     img.src = url;
+  });
+}
+
+export default function ImageInput({ onImagesLoaded }) {
+  const cameraInputRef = useRef(null);
+  const galleryInputRef = useRef(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleImageChange = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = ''; // একই ফাইল আবার বাছলে যাতে change fire করে
+    if (files.length === 0) return;
+    setLoading(true);
+    try {
+      const canvases = [];
+      for (const f of files) {
+        try { canvases.push(await fileToCanvas(f)); }
+        catch (err) { console.error('Skipped a file:', err); }
+      }
+      if (canvases.length > 0) onImagesLoaded(canvases);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -52,15 +59,16 @@ export default function ImageInput({ onImageLoaded }) {
       </div>
 
       <div className="button-group">
-        <button className="btn primary-btn" onClick={() => cameraInputRef.current?.click()}>
+        <button className="btn primary-btn" onClick={() => cameraInputRef.current?.click()} disabled={loading}>
           <span className="icon">📷</span>
-          Open Camera
+          {loading ? 'Loading…' : 'Open Camera'}
         </button>
-        <button className="btn secondary-btn" onClick={() => galleryInputRef.current?.click()}>
+        <button className="btn secondary-btn" onClick={() => galleryInputRef.current?.click()} disabled={loading}>
           <span className="icon">📂</span>
-          Upload File
+          {loading ? 'Loading…' : 'Upload Files'}
         </button>
       </div>
+      <p className="hint-text">গ্যালারি থেকে একসাথে একাধিক পেজ বাছাই করা যায়</p>
 
       {/* Hidden Inputs */}
       <input
@@ -74,6 +82,7 @@ export default function ImageInput({ onImageLoaded }) {
       <input
         type="file"
         accept="image/*"
+        multiple
         ref={galleryInputRef}
         onChange={handleImageChange}
         className="hidden-input"

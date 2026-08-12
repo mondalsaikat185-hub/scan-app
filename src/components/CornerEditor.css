@@ -3,28 +3,32 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  min-height: 100vh;
-  padding: 20px;
+  height: 100vh;
+  height: 100dvh;   /* মোবাইল অ্যাড্রেসবার-সহ সঠিক উচ্চতা */
+  overflow: hidden;
+  padding: 12px 16px;
   background-color: #0f172a;
   color: #f8fafc;
   box-sizing: border-box;
 }
 
 .editor-title {
-  margin-top: 10px;
-  font-size: 1.8rem;
+  margin-top: 4px;
+  font-size: 1.4rem;
   font-weight: 700;
   margin-bottom: 8px;
 }
 
 .editor-subtitle {
   color: #94a3b8;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
   text-align: center;
+  font-size: 0.85rem;
 }
 
 .canvas-wrapper {
   flex: 1;
+  min-height: 0;   /* flex overflow ঠেকায় — ক্যানভাস কখনো স্ক্রিন ছাড়াবে না */
   display: flex;
   justify-content: center;
   align-items: center;
@@ -47,8 +51,10 @@ canvas {
   width: 100%;
   max-width: 400px;
   display: flex;
+  gap: 12px;
   justify-content: center;
-  padding-bottom: 20px;
+  padding: 10px 0 14px;
+  flex-shrink: 0;   /* বাটন-বার সবসময় দৃশ্যমান */
 }
 
 .next-btn {
