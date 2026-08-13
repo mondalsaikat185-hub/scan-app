@@ -190,6 +190,14 @@ function App() {
     }
   };
 
+  // প্রিভিউ স্ক্রিন থেকে "ফিরে যান" — পেজ বাতিল নয়, শুধু আবার ক্রপ ঠিক করা।
+  // ইউজার যেভাবে কোণা রেখে এসেছিল ঠিক সেখান থেকেই শুরু হয়, তাই কাজ হারায় না।
+  const handleBackToCrop = () => {
+    if (lastCorners) setInitialCorners(lastCorners);
+    setWarpedCanvas(null);
+    setStep('crop');
+  };
+
   const handleAddPage = (pageObj) => {
     // পুনঃসম্পাদনার জন্য দরকারি সব কিছু পেজের সাথেই সেভ হয়
     const fullPage = { ...pageObj, originalBlob, corners: lastCorners };
@@ -357,6 +365,8 @@ function App() {
           imageCanvas={imageCanvas}
           initialCorners={initialCorners}
           onComplete={handleCornersComplete}
+          onCancel={handleCancelScan}
+          isEditing={editingIndex !== null}
         />
       )}
 
@@ -364,7 +374,8 @@ function App() {
         <ResultView 
           warpedCanvas={warpedCanvas}
           onAddPage={handleAddPage}
-          onReset={handleCancelScan}
+          onBack={handleBackToCrop}
+          onDiscard={handleCancelScan}
           initialFilter={editingIndex !== null ? editFilter : 'magic'}
           isEditing={editingIndex !== null}
         />

@@ -3,7 +3,7 @@ import './CornerEditor.css';
 
 const HANDLE_RADIUS = 24;
 
-export default function CornerEditor({ imageCanvas, initialCorners, onComplete }) {
+export default function CornerEditor({ imageCanvas, initialCorners, onComplete, onCancel, isEditing = false }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const [corners, setCorners] = useState(initialCorners);
@@ -246,6 +246,11 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
       </div>
 
       <div className="bottom-bar">
+        {onCancel && (
+          <button className="btn secondary-btn" onClick={onCancel} title={isEditing ? 'এডিট বাতিল — পেজ আগের মতোই থাকবে' : 'এই স্ক্যান বাতিল'}>
+            {isEditing ? 'এডিট বাতিল' : 'বাতিল'}
+          </button>
+        )}
         <button className="btn secondary-btn" onClick={handleReset}>
           Reset
         </button>

@@ -3,7 +3,7 @@ import { canvasToBlob } from '../lib/canvasUtils';
 import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
-export default function ResultView({ warpedCanvas, onReset, onAddPage, initialFilter = 'magic', isEditing = false }) {
+export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage, initialFilter = 'magic', isEditing = false }) {
   const [filter, setFilter] = useState(initialFilter);
   const [finalCanvas, setFinalCanvas] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -80,11 +80,13 @@ export default function ResultView({ warpedCanvas, onReset, onAddPage, initialFi
       </div>
 
       <div className="action-bar">
-        <button className="btn secondary-btn" onClick={onReset} disabled={isProcessing}>
-          Cancel
+        <button className="btn secondary-btn" onClick={onBack} disabled={isProcessing}
+                title="আবার কোণা ঠিক করুন — পেজ বাতিল হবে না">
+          ← কোণা ঠিক করুন
         </button>
         <button className="btn primary-btn" onClick={handleAddPage} disabled={isProcessing}>
-          <span className="icon">✓</span> {isProcessing ? 'Processing...' : 'Add to document'}
+          <span className="icon">✓</span>{' '}
+          {isProcessing ? 'Processing...' : (isEditing ? 'Update page' : 'Add to document')}
         </button>
       </div>
     </div>
