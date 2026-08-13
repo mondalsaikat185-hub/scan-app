@@ -3,7 +3,7 @@ import './CornerEditor.css';
 
 const HANDLE_RADIUS = 24;
 
-export default function CornerEditor({ imageCanvas, initialCorners, onComplete, onCancel, isEditing = false }) {
+export default function CornerEditor({ imageCanvas, initialCorners, onComplete, onCancel, onRotate, isEditing = false }) {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const [corners, setCorners] = useState(initialCorners);
@@ -231,6 +231,14 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete, 
       <h2 className="editor-title">Adjust Corners</h2>
       <p className="editor-subtitle">কোণা টানুন, অথবা যেকোনো <b>ধার ধরে</b> টেনে পুরো লাইন সরান</p>
       
+      {onRotate && (
+        <div className="rotate-bar">
+          <button className="rotate-btn" onClick={() => onRotate(-90, corners)} title="বাঁদিকে ঘোরান">↺</button>
+          <span className="rotate-label">ঘোরান</span>
+          <button className="rotate-btn" onClick={() => onRotate(90, corners)} title="ডানদিকে ঘোরান">↻</button>
+        </div>
+      )}
+
       <div className="canvas-wrapper">
         <canvas
           ref={canvasRef}

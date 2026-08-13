@@ -1,5 +1,5 @@
 import { PDFDocument } from 'pdf-lib';
-import { downscaleBlob } from './canvasUtils';
+import { downscaleBlob, rotateBlob } from './canvasUtils';
 
 // A4 @ 72dpi (PDF point) — 210mm × 297mm
 export const A4_W = 595.276;
@@ -56,11 +56,22 @@ export async function makePdfBlob(canvas, filterType = 'scan') {
  * সব পেজ নিয়ে একটা মাল্টি-পেজ PDF — প্রতিটা পাতা ঠিক A4 মাপের,
  * তাই প্রিন্ট করার সময় স্কেলিং/কাটাকুটির সমস্যা হয় না।
  */
-export async function makePdfFromPages(pages, quality = 'high') {
+export async function makePdfFromPages(pages, quality = 'high', orientation = 'auto') {
   const pdfDoc = await PDFDocument.create();
 
   for (const p of pages) {
-    const blob = quality === 'high' ? p.blob : await downscaleBlob(p.blob, quality);
+    let blob = quality === 'high' ? p.blob : await downscaleBlob(p.blob, quality);
+
+    // 'portrait' মোডে সব পাতা লম্বালম্বি A4 — চওড়া ছবি ৯০° ঘুরিয়ে বসানো হয়,
+    // যাতে ছাপার সময় সব কাগজ একই দিকে থাকে (কাগজ বদলাতে হয় না)।
+    // 'auto' মোডে চওড়া ছবির জন্য A4 ল্যান্ডস্কেপ পাতা তৈরি হয়।
+    if (orientation === 'portrait') {
+      const probe = await createImageBitmap(blob);
+      const wide = probe.width > probe.height;
+      probe.close();
+      if (wide) blob = await rotateBlob(blob, 90);
+    }
+
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const image = await embed(pdfDoc, bytes, blob.type === 'image/png');
     const f = fitOnA4(image.width, image.height);

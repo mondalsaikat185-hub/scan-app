@@ -694,12 +694,26 @@ function warp(imageData, corners) {
     // A4 (1:√2) কাছাকাছি হলে ঠিক A4 অনুপাতে বসাও — প্রিন্টে নিখুঁত হবে
     const A4_P = 1 / Math.SQRT2;   // ০.৭০৭ (portrait)
     const A4_L = Math.SQRT2;       // ১.৪১৪ (landscape)
-    // A4-এর কাছাকাছি হলে ঠিক A4 অনুপাতে বসাও — প্রিন্টে নিখুঁত হবে।
-    // অনুমান আত্মবিশ্বাসী হলে কড়া সীমা (২২%), না হলে শিথিল (৩২%) —
-    // কারণ তখন A4 হওয়ার সম্ভাবনাই বেশি। রসিদ/কার্ড এই সীমার বাইরে থাকে।
+    // ---------- সুরক্ষা ১: দিক (orientation) কখনো উল্টে যাবে না ----------
+    // লম্বা কাগজ কখনোই চওড়া হয়ে যাবে না — এটাই "ছবি বিশৃঙ্খল হয়ে যাওয়ার"
+    // প্রধান কারণ ছিল: কোণায় সামান্য নড়াচড়ায় অনুমান উল্টো দিকে লাফিয়ে
+    // portrait কাগজকে landscape A4-এ ঠেসে দিত।
+    const measPortrait = measRatio < 1;
+    if ((ratio < 1) !== measPortrait) ratio = measRatio;
+
+    // ---------- সুরক্ষা ২: মাপা অনুপাত থেকে বেশি দূরে যাবে না ----------
+    // পরিপ্রেক্ষিত সংশোধন সাহায্য করে, কিন্তু ২৫%-এর বেশি টানাটানি মানেই
+    // কিছু ভুল হয়েছে — তখন মাপা অনুপাতই নিরাপদ।
+    const LIMIT = 0.25;
+    const lo = measRatio * (1 - LIMIT), hi = measRatio * (1 + LIMIT);
+    if (ratio < lo || ratio > hi) ratio = Math.min(hi, Math.max(lo, ratio));
+
+    // ---------- A4 snap — শুধু মিলে যাওয়া দিকেই ----------
+    const target = measPortrait ? A4_P : A4_L;
     const tol = confident ? 0.22 : 0.32;
-    for (const target of [A4_P, A4_L]) {
-      if (Math.abs(ratio - target) / target < tol) { ratio = target; break; }
+    if (Math.abs(ratio - target) / target < tol &&
+        Math.abs(target - measRatio) / measRatio < LIMIT) {
+      ratio = target;
     }
 
     // আউটপুট সাইজ — সবচেয়ে লম্বা দিকটা মূল মাপ ধরে রাখে (রেজোলিউশন হারায় না)
@@ -897,7 +911,7 @@ function deskewMat(cv, srcRgba) {
     // ---- মোটা দাগে খোঁজা (±৮°, ১° ধাপে) ----
     let bestA = 0, bestS = scoreAt(0);
     const base = bestS;
-    for (let a = -8; a <= 8; a += 1) {
+    for (let a = -6; a <= 6; a += 1) {
       if (a === 0) continue;
       const sc = scoreAt(a);
       if (sc > bestS) { bestS = sc; bestA = a; }
@@ -910,7 +924,7 @@ function deskewMat(cv, srcRgba) {
 
     // ---- যথেষ্ট উন্নতি না হলে হাত দিও না ----
     // (৮% এর কম উন্নতি = সন্দেহজনক; অকারণে ঘুরিয়ে ক্ষতি করার দরকার নেই)
-    if (Math.abs(bestA) < 0.25 || base <= 0 || bestS < base * 1.08) return null;
+    if (Math.abs(bestA) < 0.3 || Math.abs(bestA) > 6 || base <= 0 || bestS < base * 1.12) return null;
 
     const fullCenter = new cv.Point(srcRgba.cols / 2, srcRgba.rows / 2);
     rot = cv.getRotationMatrix2D(fullCenter, bestA, 1);
@@ -973,7 +987,7 @@ function unshearText(cv, srcRgba) {
         rights.push({ y: yc, x: maxX });
       }
     }
-    if (lefts.length < 8) return null;
+    if (lefts.length < 12) return null;
 
     // ঢাল নির্ণয় (dx/dy) — বহিরাগত মান এড়াতে মধ্যক-ভিত্তিক
     const slopeOf = (pts) => {
@@ -996,11 +1010,11 @@ function unshearText(cv, srcRgba) {
     // দুই পাশের ঢাল একই দিকে ও কাছাকাছি হলে তবেই বিশ্বাস
     if (sL * sR <= 0) return null;
     const diff = Math.abs(sL - sR) / Math.max(Math.abs(sL), Math.abs(sR));
-    if (diff > 0.5) return null;
+    if (diff > 0.35) return null;
 
     const slope = (sL + sR) / 2;
     const deg = Math.atan(slope) * 180 / Math.PI;
-    if (Math.abs(deg) < 0.4 || Math.abs(deg) > 8) return null;   // নগণ্য বা সন্দেহজনক
+    if (Math.abs(deg) < 0.5 || Math.abs(deg) > 4.5) return null;  // নগণ্য বা সন্দেহজনক
 
     // shear ম্যাট্রিক্স: x' = x - slope*(y - yc)
     const yc = srcRgba.rows / 2;

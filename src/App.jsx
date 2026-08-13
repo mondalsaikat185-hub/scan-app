@@ -11,7 +11,7 @@ import ImageInput from './components/ImageInput';
 import CameraScan from './components/CameraScan';
 import CornerEditor from './components/CornerEditor';
 import ResultView from './components/ResultView';
-import { scaleCanvas, blobToCanvas, originalBlobOf, rotateBlob } from './lib/canvasUtils';
+import { scaleCanvas, blobToCanvas, originalBlobOf, rotateBlob, rotateCanvas, rotateQuad } from './lib/canvasUtils';
 import PageReview from './components/PageReview';
 import Library from './components/Library';
 import InstallPrompt from './components/InstallPrompt';
@@ -45,6 +45,7 @@ function App() {
   const [aiOn, setAiOn] = useState(isAIEnabled());        // AI ডিটেকশন চালু?
   const [aiReady, setAiReady] = useState(false);          // মডেল ফাইল আছে?
   const [saveReq, setSaveReq] = useState(null);           // সেভ ডায়ালগের অনুরোধ
+  const [cropKey, setCropKey] = useState(0);              // ঘোরানোর পর এডিটর রিসেট করতে
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -108,17 +109,17 @@ function App() {
   };
 
   // ডায়ালগে ইউজার সব ঠিক করে দিলে তবেই আসল কাজ
-  const doSave = async ({ name, quality: q, destination }) => {
+  const doSave = async ({ name, quality: q, orientation, destination }) => {
     const req = saveReq;
     setSaveReq(null);
     if (!req) return;
     setBusy(true);
     try {
       if (destination === 'share') {
-        await sharePdf(req.pages, name, q);
+        await sharePdf(req.pages, name, q, orientation);
         return;
       }
-      const blob = await makePdfFromPages(req.pages, q);
+      const blob = await makePdfFromPages(req.pages, q, orientation);
       await savePdfBlob(blob, name, destination);
     } catch (err) {
       console.error('Save error', err);
@@ -189,6 +190,18 @@ function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // ক্রপ স্ক্রিনেই ছবি ঘোরানো — সিলেকশনের আগে সোজা করে নেওয়া যায়,
+  // তাতে কোণা বসানো অনেক সহজ হয়। কোণাগুলোও একই সাথে ঘুরিয়ে দেওয়া হয়,
+  // তাই ইউজারের করা কাজ নষ্ট হয় না।
+  const handleRotateCrop = (deg, currentCorners) => {
+    if (!imageCanvas) return;
+    const W = imageCanvas.width, H = imageCanvas.height;
+    const rotated = rotateCanvas(imageCanvas, deg);
+    setImageCanvas(rotated);
+    setInitialCorners(rotateQuad(currentCorners || initialCorners, deg, W, H));
+    setCropKey((k) => k + 1);   // এডিটর নতুন করে বসবে
   };
 
   // প্রিভিউ স্ক্রিন থেকে "ফিরে যান" — পেজ বাতিল নয়, শুধু আবার ক্রপ ঠিক করা।
@@ -387,10 +400,12 @@ function App() {
       
       {step === 'crop' && (
         <CornerEditor 
+          key={cropKey}
           imageCanvas={imageCanvas}
           initialCorners={initialCorners}
           onComplete={handleCornersComplete}
           onCancel={handleCancelScan}
+          onRotate={handleRotateCrop}
           isEditing={editingIndex !== null}
         />
       )}

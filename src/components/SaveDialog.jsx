@@ -16,6 +16,7 @@ import './SaveDialog.css';
 export default function SaveDialog({ defaultName, defaultQuality, onCancel, onConfirm }) {
   const [name, setName] = useState(defaultName || 'document');
   const [quality, setQuality] = useState(defaultQuality || 'high');
+  const [orientation, setOrientation] = useState('auto');
   const hasPicker = canPickLocation();
 
   useEffect(() => {
@@ -26,7 +27,7 @@ export default function SaveDialog({ defaultName, defaultQuality, onCancel, onCo
 
   const go = (destination) => {
     const finalName = (name || '').trim() || defaultName || 'document';
-    onConfirm({ name: finalName, quality, destination });
+    onConfirm({ name: finalName, quality, orientation, destination });
   };
 
   return (
@@ -58,6 +59,18 @@ export default function SaveDialog({ defaultName, defaultQuality, onCancel, onCo
               <span>{p.maxDim}px</span>
             </button>
           ))}
+        </div>
+
+        <label className="save-label">পাতার দিক</label>
+        <div className="save-quality">
+          <button className={`save-q-btn ${orientation === 'auto' ? 'active' : ''}`}
+                  onClick={() => setOrientation('auto')}>
+            <strong>Auto</strong><span>যেমন আছে</span>
+          </button>
+          <button className={`save-q-btn ${orientation === 'portrait' ? 'active' : ''}`}
+                  onClick={() => setOrientation('portrait')}>
+            <strong>All Portrait</strong><span>সব লম্বালম্বি</span>
+          </button>
         </div>
 
         <label className="save-label">কোথায় রাখবেন</label>

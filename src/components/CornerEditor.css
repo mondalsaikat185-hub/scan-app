@@ -60,3 +60,18 @@ canvas {
 .next-btn {
   width: 100%;
 }
+
+.corner-editor-container .rotate-bar {
+  display: flex; align-items: center; justify-content: center;
+  gap: 14px; margin-bottom: 8px; flex-shrink: 0;
+}
+.corner-editor-container .rotate-btn {
+  width: 42px; height: 42px; border-radius: 50%;
+  border: 1px solid rgba(148,163,184,0.28);
+  background: rgba(148,163,184,0.12);
+  color: #e2e8f0; font-size: 1.25rem; line-height: 1; cursor: pointer;
+  transition: all .15s ease;
+}
+.corner-editor-container .rotate-btn:hover { background: rgba(59,130,246,0.25); border-color:#3b82f6; color:#fff; }
+.corner-editor-container .rotate-btn:active { transform: scale(0.92); }
+.corner-editor-container .rotate-label { color:#94a3b8; font-size:0.8rem; font-weight:700; }

@@ -101,3 +101,17 @@ export async function rotateBlob(blob, deg) {
   return new Promise((res) => r.toBlob((b) => res(b || blob),
     isPng ? 'image/png' : 'image/jpeg', isPng ? undefined : 0.95));
 }
+
+/**
+ * ছবি ঘোরালে কোণাগুলোও একই সাথে ঘোরাতে হয়, নাহলে সিলেকশন ভুল জায়গায় বসে।
+ * W,H = ঘোরানোর আগের ছবির মাপ।
+ */
+export function rotateQuad(corners, deg, W, H) {
+  const d = ((deg % 360) + 360) % 360;
+  if (d === 0 || !corners) return corners;
+  return corners.map((p) => {
+    if (d === 90)  return { x: H - p.y, y: p.x };        // ঘড়ির কাঁটার দিকে
+    if (d === 180) return { x: W - p.x, y: H - p.y };
+    return { x: p.y, y: W - p.x };                        // 270 (বিপরীত)
+  });
+}
