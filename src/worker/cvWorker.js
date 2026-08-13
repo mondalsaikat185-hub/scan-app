@@ -175,6 +175,42 @@ function rectAspectRatio(quad, imgW, imgH) {
   }
 }
 
+/**
+ * অনুপাত অনুমানের "স্থিতিশীলতা পরীক্ষা"।
+ *
+ * কেন দরকার: কাগজের ধার যখন প্রায় সমান্তরাল দেখায় (সোজাসুজি তোলা ছবি),
+ * তখন পরিপ্রেক্ষিত-সমীকরণ প্রায় অনির্ণেয় হয়ে পড়ে — কোণায় মাত্র ২-৩ পিক্সেল
+ * হেরফের হলেই অনুপাত অনেকটা বদলে যায়। (বাস্তবে মাপা হয়েছে: ৬px → ০.৭০৭ বনাম ০.৫০৯।)
+ *
+ * তাই কোণাগুলো সামান্য নাড়িয়ে কয়েকবার হিসাব করি। ফল যদি এদিক-ওদিক লাফায়,
+ * অনুমানটাকে "অনির্ভরযোগ্য" ধরি — তখন warp() A4-এর দিকে বেশি ঝোঁকে,
+ * যা বাস্তবে প্রায় সবসময়ই সঠিক (বেশিরভাগ কাগজই A4)।
+ */
+function rectAspectRatioRobust(quad, W, H) {
+  const base = rectAspectRatio(quad, W, H);
+  if (!base) return null;
+
+  const d = Math.max(W, H) * 0.004;   // ≈ ছবির ০.৪% (১০০০px-এ ৪px)
+  const samples = [base.r];
+  const patterns = [
+    [ 1, -1,  1, -1], [-1,  1, -1,  1],
+    [ 1,  1, -1, -1], [-1, -1,  1,  1],
+  ];
+  for (const pat of patterns) {
+    const q2 = quad.map((p, i) => ({ x: p.x + pat[i] * d, y: p.y + pat[(i + 1) % 4] * d }));
+    const r2 = rectAspectRatio(q2, W, H);
+    if (r2 && isFinite(r2.r) && r2.r > 0) samples.push(r2.r);
+  }
+  if (samples.length < 3) return { r: base.r, conf: false };
+
+  samples.sort((a, b) => a - b);
+  const median = samples[Math.floor(samples.length / 2)];
+  const spread = (samples[samples.length - 1] - samples[0]) / Math.max(1e-6, median);
+
+  // ৮%-এর বেশি লাফালাফি = অনির্ভরযোগ্য
+  return { r: median, conf: base.conf && spread < 0.08 };
+}
+
 function detectEdges(imageData) {
   const cv = self.cv;
   const W = imageData.width, H = imageData.height;
@@ -333,7 +369,7 @@ function warp(imageData, corners) {
     const measH = Math.max(hLeft, hRight);
 
     // আসল প্রস্থ:উচ্চতা অনুপাত (পরিপ্রেক্ষিত সংশোধন করে)
-    const est = rectAspectRatio(corners, imageData.width, imageData.height);
+    const est = rectAspectRatioRobust(corners, imageData.width, imageData.height);
     const measRatio = measW / Math.max(1, measH);
     let ratio, confident;
     if (est && isFinite(est.r) && est.r > 0.2 && est.r < 5 &&
