@@ -255,145 +255,300 @@ function rectAspectRatioRobust(quad, W, H) {
   return { r: median, conf: base.conf && spread < 0.08 };
 }
 
+// ---------- জ্যামিতি হেল্পার ----------
+function quadArea(q) {
+  let a = 0;
+  for (let i = 0; i < 4; i++) { const p = q[i], n = q[(i + 1) % 4]; a += p.x * n.y - n.x * p.y; }
+  return Math.abs(a) / 2;
+}
+function isConvex(q) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const p0 = q[i], p1 = q[(i + 1) % 4], p2 = q[(i + 2) % 4];
+    const cr = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x);
+    if (Math.abs(cr) < 1e-9) continue;
+    if (sign === 0) sign = Math.sign(cr); else if (Math.sign(cr) !== sign) return false;
+  }
+  return true;
+}
+// quad-এর ভেতরে (u,v) ∈ [0,1]² অনুযায়ী বিন্দু (bilinear)
+function quadPoint(q, u, v) {
+  const [tl, tr, br, bl] = q;
+  const top = { x: tl.x + (tr.x - tl.x) * u, y: tl.y + (tr.y - tl.y) * u };
+  const bot = { x: bl.x + (br.x - bl.x) * u, y: bl.y + (br.y - bl.y) * u };
+  return { x: top.x + (bot.x - top.x) * v, y: top.y + (bot.y - top.y) * v };
+}
+// দুটো লাইনের ছেদবিন্দু (প্রতিটি লাইন দুই বিন্দু দিয়ে)
+function lineIntersect(a1, a2, b1, b2) {
+  const d = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
+  if (Math.abs(d) < 1e-9) return null;
+  const pa = a1.x * a2.y - a1.y * a2.x, pb = b1.x * b2.y - b1.y * b2.x;
+  return { x: (pa * (b1.x - b2.x) - (a1.x - a2.x) * pb) / d,
+           y: (pa * (b1.y - b2.y) - (a1.y - a2.y) * pb) / d };
+}
+
+/**
+ * ডকুমেন্ট ডিটেকশন — v3
+ *
+ * আগের সংস্করণের দুর্বলতা: ছবিকে প্রথমেই grayscale করে ফেলত, তাই সাদা কাগজ আর
+ * রঙিন বেডশিট প্রায় একই উজ্জ্বলতার হলে সীমানাই খুঁজে পেত না; আর কাপড়ের বুননের
+ * অজস্র ছোট edge সত্যিকারের ধারকে ঢেকে দিত।
+ *
+ * নতুন পদ্ধতি:
+ *  ১. bilateral filter — বুনন/দানা মসৃণ করে, কিন্তু কাগজের ধার ধারালো রাখে।
+ *  ২. Lab রঙস্থানের তিন চ্যানেলেই gradient — রঙের পার্থক্যও ধরা পড়ে (শুধু আলো নয়)।
+ *  ৩. দুই ধরনের প্রার্থী: contour থেকে, আর লম্বা সরলরেখার ছেদ থেকে।
+ *  ৪. প্রতিটি প্রার্থীকে তিন দিক থেকে নম্বর: জ্যামিতি + ধারে প্রকৃত edge আছে কিনা
+ *     + ভেতর-বাহিরের উজ্জ্বলতার পার্থক্য (কাগজ সাধারণত উজ্জ্বল ও সমসত্ত্ব)।
+ */
 function detectEdges(imageData) {
   const cv = self.cv;
   const W = imageData.width, H = imageData.height;
-
-  // --- ছোট কপিতে কাজ (দ্রুত + noise কম) ---
-  const DETECT_DIM = 1000;
+  const DETECT_DIM = 800;
   const scale = Math.min(1, DETECT_DIM / Math.max(W, H));
-  let full = null, small = null, gray = null;
-  let smallW = 0, smallH = 0;
-  const candidates = []; // {pts:[4], score}
 
-  const quadScore = (ptsIn, imgArea, imgW, imgH) => {
-    const pts = orderPoints(ptsIn);
-    // area বড় + কোণ ~90° হলে score বেশি
-    let area = 0;
-    for (let i = 0; i < 4; i++) {
-      const a = pts[i], b = pts[(i + 1) % 4];
-      area += a.x * b.y - b.x * a.y;
-    }
-    area = Math.abs(area) / 2;
-    const areaRatio = area / imgArea;
-    if (areaRatio < 0.15 || areaRatio > 0.99) return 0; // খুব ছোট/পুরো ফ্রেম বাদ
-
-    // ডকুমেন্ট প্রায় সবসময় ছবির কেন্দ্র ঢেকে রাখে — কেন্দ্র quad-এর ভেতরে না থাকলে বাদ
-    // (এতে "ভীষণ ছোট" ভুল ডিটেকশন দূর হয়)
-    const cx = imgW / 2, cy = imgH / 2;
-    let sign = 0;
-    for (let i = 0; i < 4; i++) {
-      const a = pts[i], b = pts[(i + 1) % 4];
-      const cross = (b.x - a.x) * (cy - a.y) - (b.y - a.y) * (cx - a.x);
-      if (cross !== 0) {
-        if (sign === 0) sign = Math.sign(cross);
-        else if (Math.sign(cross) !== sign) return 0; // কেন্দ্র বাইরে
-      }
-    }
-
-    let angPenalty = 0;
-    for (let i = 0; i < 4; i++) {
-      const p0 = pts[(i + 3) % 4], p1 = pts[i], p2 = pts[(i + 1) % 4];
-      const v1 = { x: p0.x - p1.x, y: p0.y - p1.y }, v2 = { x: p2.x - p1.x, y: p2.y - p1.y };
-      const dot = v1.x * v2.x + v1.y * v2.y;
-      const n = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1;
-      const ang = Math.acos(Math.max(-1, Math.min(1, dot / n))) * 180 / Math.PI;
-      angPenalty += Math.abs(90 - ang);
-    }
-    let s = areaRatio * Math.max(0, 1 - angPenalty / 160);
-
-    // প্রায় পুরো-ফ্রেম quad (সব কোণা ছবির কোণার ৩%-এর মধ্যে) = আসলে কিছু পায়নি — কম প্রাধান্য
-    const eps = Math.max(imgW, imgH) * 0.03;
-    const nearFrame = pts.every(p =>
-      (p.x < eps || p.x > imgW - eps) && (p.y < eps || p.y > imgH - eps));
-    if (nearFrame) s *= 0.5;
-
-    return s;
-  };
-
-  const harvest = (binaryMat, imgArea) => {
-    let contours = null, hier = null;
-    try {
-      contours = new cv.MatVector(); hier = new cv.Mat();
-      cv.findContours(binaryMat, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-      for (let i = 0; i < contours.size(); i++) {
-        const cnt = contours.get(i);
-        if (cv.contourArea(cnt) > imgArea * 0.1) {
-          const hull = new cv.Mat();
-          cv.convexHull(cnt, hull, false, true);
-          const poly = new cv.Mat();
-          cv.approxPolyDP(hull, poly, 0.02 * cv.arcLength(hull, true), true);
-          if (poly.rows === 4) {
-            const pts = [];
-            for (let k = 0; k < 4; k++) pts.push({ x: poly.data32S[k * 2], y: poly.data32S[k * 2 + 1] });
-            const s = quadScore(pts, imgArea, smallW, smallH);
-            if (s > 0) candidates.push({ pts, score: s });
-          } else if (poly.rows > 4) {
-            // fallback প্রার্থী: ঘোরানো bounding box
-            const rr = cv.minAreaRect(cnt);
-            const v = cv.RotatedRect.points(rr);
-            const pts = v.map(p => ({ x: p.x, y: p.y }));
-            const s = quadScore(pts, imgArea, smallW, smallH) * 0.8; // সরাসরি 4-gon-এর চেয়ে কম প্রাধান্য
-            if (s > 0) candidates.push({ pts, score: s });
-          }
-          poly.delete(); hull.delete();
-        }
-        cnt.delete();
-      }
-    } finally { if (contours) contours.delete(); if (hier) hier.delete(); }
-  };
+  let full = null, small = null, rgb = null, lab = null, chans = null,
+      grad = null, gradAcc = null, edges = null, kernel = null, Lch = null;
 
   try {
     full = matFromImageData(imageData);
     small = new cv.Mat();
     if (scale < 1) cv.resize(full, small, new cv.Size(Math.round(W * scale), Math.round(H * scale)), 0, 0, cv.INTER_AREA);
     else full.copyTo(small);
-    gray = new cv.Mat();
-    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY, 0);
-    const imgArea = small.cols * small.rows;
-    smallW = small.cols; smallH = small.rows;
+    const sW = small.cols, sH = small.rows, imgArea = sW * sH;
 
-    // --- পদ্ধতি ১: blur + Canny (মাঝারি) + dilate ---
-    let blur = new cv.Mat(), edges = new cv.Mat(), dil = new cv.Mat();
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-    cv.Canny(blur, edges, 50, 150);
-    const M = cv.Mat.ones(3, 3, cv.CV_8U);
-    cv.dilate(edges, dil, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-    harvest(dil, imgArea);
+    // ---- ১. টেক্সচার দমন (ধার অক্ষত) ----
+    rgb = new cv.Mat();
+    cv.cvtColor(small, rgb, cv.COLOR_RGBA2RGB, 0);
+    const smoothed = new cv.Mat();
+    try {
+      cv.bilateralFilter(rgb, smoothed, 9, 45, 9, cv.BORDER_DEFAULT);
+      smoothed.copyTo(rgb);
+    } catch (e) { /* না পারলে আসলটাই */ }
+    smoothed.delete();
 
-    // --- পদ্ধতি ২: Canny কড়া threshold ---
-    let edges2 = new cv.Mat(), dil2 = new cv.Mat();
-    cv.Canny(blur, edges2, 100, 250);
-    cv.dilate(edges2, dil2, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-    harvest(dil2, imgArea);
+    // ---- ২. Lab-এর তিন চ্যানেলে gradient, সর্বোচ্চটা নাও ----
+    lab = new cv.Mat();
+    cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab, 0);
+    chans = new cv.MatVector();
+    cv.split(lab, chans);
+    const l0 = chans.get(0);
+    Lch = l0.clone();                    // উজ্জ্বলতা — পরে contrast স্কোরে লাগবে
+    l0.delete();
 
-    // --- পদ্ধতি ৩: Otsu binary (উজ্জ্বল কাগজ vs গাঢ় ব্যাকগ্রাউন্ড) ---
-    let bin = new cv.Mat();
-    cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
-    harvest(bin, imgArea);
-
-    M.delete(); blur.delete(); edges2.delete(); dil.delete(); dil2.delete(); bin.delete();
-
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => b.score - a.score);
-      let bestQuadSmall = orderPoints(candidates[0].pts);
-      // Gutter refinement using edges from method 1
-      bestQuadSmall = refineGutter(cv, gray, bestQuadSmall);
-
-      const bestPts = bestQuadSmall.map(p => ({
-        x: Math.max(0, Math.min(W, p.x / scale)),
-        y: Math.max(0, Math.min(H, p.y / scale)),
-      }));
-      edges.delete();
-      return bestPts;
+    gradAcc = cv.Mat.zeros(sH, sW, cv.CV_32F);
+    for (let i = 0; i < 3; i++) {
+      const ch = chans.get(i);
+      const gx = new cv.Mat(), gy = new cv.Mat(), gx32 = new cv.Mat(), gy32 = new cv.Mat(), mag = new cv.Mat();
+      cv.Scharr(ch, gx, cv.CV_32F, 1, 0, 1, 0, cv.BORDER_DEFAULT);
+      cv.Scharr(ch, gy, cv.CV_32F, 0, 1, 1, 0, cv.BORDER_DEFAULT);
+      gx.convertTo(gx32, cv.CV_32F); gy.convertTo(gy32, cv.CV_32F);
+      cv.magnitude(gx32, gy32, mag);
+      // a,b চ্যানেলের রঙ-পার্থক্যকে একটু বেশি গুরুত্ব (রঙিন ব্যাকগ্রাউন্ডে সাহায্য করে)
+      if (i > 0) mag.convertTo(mag, -1, 1.6, 0);
+      cv.max(gradAcc, mag, gradAcc);
+      // ch সহ প্রতিটি অস্থায়ী Mat মুছতেই হবে — ক্যামেরা মোডে এই লুপ
+      // সেকেন্ডে কয়েকবার চলে, একটা লিকও দ্রুত মেমরি শেষ করে দেবে
+      [gx, gy, gx32, gy32, mag, ch].forEach(m => m.delete());
     }
-    
-    edges.delete();
-    // কিছুই না পেলে — ৫% মার্জিনে default
-    const mx = W * 0.05, my = H * 0.05;
+
+    grad = new cv.Mat();
+    cv.normalize(gradAcc, grad, 0, 255, cv.NORM_MINMAX, cv.CV_8U);
+
+    edges = new cv.Mat();
+    cv.threshold(grad, edges, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 2,
+                    cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+
+    // ---------- স্কোরিং হেল্পার ----------
+    const edgeAt = (x, y) => {
+      const xi = Math.round(x), yi = Math.round(y);
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const X = xi + dx, Y = yi + dy;
+        if (X >= 0 && Y >= 0 && X < sW && Y < sH && edges.data[Y * sW + X]) return true;
+      }
+      return false;
+    };
+    // প্রতিটি ধারে সত্যিকারের edge কতটা আছে (0..1)
+    const edgeSupport = (q) => {
+      const N = 24;
+      let hit = 0, tot = 0;
+      for (let s = 0; s < 4; s++) {
+        const a = q[s], b = q[(s + 1) % 4];
+        for (let i = 1; i < N; i++) {
+          const t = i / N;
+          if (edgeAt(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) hit++;
+          tot++;
+        }
+      }
+      return tot ? hit / tot : 0;
+    };
+    // ভেতর বনাম বাহিরের উজ্জ্বলতা (কাগজ সাধারণত উজ্জ্বলতর ও সমসত্ত্ব)
+    const Ldata = Lch.data;
+    const Lat = (x, y) => {
+      const xi = Math.min(sW - 1, Math.max(0, Math.round(x)));
+      const yi = Math.min(sH - 1, Math.max(0, Math.round(y)));
+      return Ldata[yi * sW + xi];
+    };
+    const contrastScore = (q) => {
+      let insideSum = 0, insideSq = 0, n = 0;
+      for (let u = 1; u <= 5; u++) for (let v = 1; v <= 5; v++) {
+        const p = quadPoint(q, u / 6, v / 6);
+        const val = Lat(p.x, p.y);
+        insideSum += val; insideSq += val * val; n++;
+      }
+      const inMean = insideSum / n;
+      const inStd = Math.sqrt(Math.max(0, insideSq / n - inMean * inMean));
+
+      const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
+      const cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+      const off = Math.sqrt(quadArea(q)) * 0.06;
+      let outSum = 0, m = 0;
+      for (let s = 0; s < 4; s++) {
+        const a = q[s], b = q[(s + 1) % 4];
+        for (const t of [0.25, 0.5, 0.75]) {
+          const px = a.x + (b.x - a.x) * t, py = a.y + (b.y - a.y) * t;
+          const dx = px - cx, dy = py - cy, len = Math.hypot(dx, dy) || 1;
+          outSum += Lat(px + (dx / len) * off, py + (dy / len) * off);
+          m++;
+        }
+      }
+      const outMean = outSum / Math.max(1, m);
+      const diff = Math.min(1, Math.abs(inMean - outMean) / 40);   // পার্থক্য যত বেশি তত ভালো
+      const uniform = Math.max(0, 1 - inStd / 60);                 // ভেতর সমসত্ত্ব হলে ভালো
+      const bright = inMean > outMean ? 1 : 0.55;                  // কাগজ সাধারণত উজ্জ্বলতর
+      return (0.6 * diff + 0.4 * uniform) * bright;
+    };
+    const geomScore = (q) => {
+      const area = quadArea(q);
+      const ar = area / imgArea;
+      if (ar < 0.12 || ar > 0.99) return 0;
+      if (!isConvex(q)) return 0;
+      const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      const wT = d(q[0], q[1]), wB = d(q[3], q[2]), hL = d(q[0], q[3]), hR = d(q[1], q[2]);
+      if (Math.min(wT, wB) < Math.max(wT, wB) * 0.4) return 0;
+      if (Math.min(hL, hR) < Math.max(hL, hR) * 0.4) return 0;
+      let angPen = 0;
+      for (let i = 0; i < 4; i++) {
+        const p0 = q[(i + 3) % 4], p1 = q[i], p2 = q[(i + 1) % 4];
+        const v1 = { x: p0.x - p1.x, y: p0.y - p1.y }, v2 = { x: p2.x - p1.x, y: p2.y - p1.y };
+        const dot = v1.x * v2.x + v1.y * v2.y;
+        const nn = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1;
+        angPen += Math.abs(90 - Math.acos(Math.max(-1, Math.min(1, dot / nn))) * 180 / Math.PI);
+      }
+      const angOk = Math.max(0, 1 - angPen / 140);
+      // এলাকা: ৩৫–৯০% হলে আদর্শ
+      const areaScore = ar < 0.35 ? ar / 0.35 : (ar > 0.9 ? Math.max(0, (0.99 - ar) / 0.09) : 1);
+      return angOk * (0.5 + 0.5 * areaScore);
+    };
+    const totalScore = (q) => {
+      const g = geomScore(q);
+      if (g <= 0) return 0;
+      return g * (0.25 + 0.45 * edgeSupport(q) + 0.30 * contrastScore(q));
+    };
+
+    // ---------- প্রার্থী সংগ্রহ ----------
+    const candidates = [];
+    const addCand = (pts) => {
+      if (!pts || pts.length !== 4) return;
+      if (pts.some(p => !isFinite(p.x) || !isFinite(p.y))) return;
+      // ছবির সীমার সামান্য বাইরে গেলে টেনে আনো
+      const q = orderPoints(pts.map(p => ({
+        x: Math.max(-sW * 0.05, Math.min(sW * 1.05, p.x)),
+        y: Math.max(-sH * 0.05, Math.min(sH * 1.05, p.y)),
+      })));
+      const sc = totalScore(q);
+      if (sc > 0) candidates.push({ q, sc });
+    };
+
+    // (ক) contour-ভিত্তিক
+    {
+      let contours = new cv.MatVector(), hier = new cv.Mat();
+      cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        if (cv.contourArea(cnt) > imgArea * 0.08) {
+          const hull = new cv.Mat(), poly = new cv.Mat();
+          cv.convexHull(cnt, hull, false, true);
+          for (const eps of [0.02, 0.04]) {
+            cv.approxPolyDP(hull, poly, eps * cv.arcLength(hull, true), true);
+            if (poly.rows === 4) {
+              const pts = [];
+              for (let k = 0; k < 4; k++) pts.push({ x: poly.data32S[k * 2], y: poly.data32S[k * 2 + 1] });
+              addCand(pts);
+              break;
+            }
+          }
+          if (poly.rows !== 4) {
+            const rr = cv.minAreaRect(cnt);
+            addCand(cv.RotatedRect.points(rr).map(p => ({ x: p.x, y: p.y })));
+          }
+          hull.delete(); poly.delete();
+        }
+        cnt.delete();
+      }
+      contours.delete(); hier.delete();
+    }
+
+    // (খ) লাইন-ভিত্তিক: লম্বা সরলরেখা → চরম রেখা → ছেদ
+    {
+      const lines = new cv.Mat();
+      cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 55,
+                     Math.max(30, Math.min(sW, sH) * 0.22), Math.max(8, Math.min(sW, sH) * 0.03));
+      const horiz = [], vert = [];
+      for (let i = 0; i < lines.rows; i++) {
+        const x1 = lines.data32S[i*4], y1 = lines.data32S[i*4+1];
+        const x2 = lines.data32S[i*4+2], y2 = lines.data32S[i*4+3];
+        const len = Math.hypot(x2 - x1, y2 - y1);
+        const ang = Math.abs(Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI);
+        const item = { a: { x: x1, y: y1 }, b: { x: x2, y: y2 }, len,
+                       mx: (x1 + x2) / 2, my: (y1 + y2) / 2 };
+        if (ang < 40 || ang > 140) horiz.push(item);
+        else if (ang > 50 && ang < 130) vert.push(item);
+      }
+      lines.delete();
+
+      if (horiz.length >= 2 && vert.length >= 2) {
+        const byTop = [...horiz].sort((p, q2) => p.my - q2.my);
+        const byLeft = [...vert].sort((p, q2) => p.mx - q2.mx);
+        const tops = byTop.slice(0, 2);
+        const bots = byTop.slice(-2).reverse();
+        const lefts = byLeft.slice(0, 2);
+        const rights = byLeft.slice(-2).reverse();
+        for (const t of tops) for (const bo of bots) for (const l of lefts) for (const r of rights) {
+          if (t === bo || l === r) continue;
+          const tl = lineIntersect(t.a, t.b, l.a, l.b);
+          const tr = lineIntersect(t.a, t.b, r.a, r.b);
+          const br = lineIntersect(bo.a, bo.b, r.a, r.b);
+          const bl = lineIntersect(bo.a, bo.b, l.a, l.b);
+          if (tl && tr && br && bl) addCand([tl, tr, br, bl]);
+        }
+      }
+    }
+
+    // ---------- সেরা প্রার্থী ----------
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.sc - a.sc);
+      const best = candidates[0];
+      // নম্বর খুব কম হলে বিশ্বাস কোরো না
+      if (best.sc >= 0.30) {
+        let q = refineGutter(cv, Lch, best.q);
+        return q.map(p => ({
+          x: Math.max(0, Math.min(W, p.x / scale)),
+          y: Math.max(0, Math.min(H, p.y / scale)),
+        }));
+      }
+    }
+
+    // কিছুই না পেলে — ৪% মার্জিনে default (ইউজার হাতে ঠিক করবে)
+    const mx = W * 0.04, my = H * 0.04;
+    return [{x:mx,y:my},{x:W-mx,y:my},{x:W-mx,y:H-my},{x:mx,y:H-my}];
+  } catch (e) {
+    const mx = W * 0.04, my = H * 0.04;
     return [{x:mx,y:my},{x:W-mx,y:my},{x:W-mx,y:H-my},{x:mx,y:H-my}];
   } finally {
-    [full, small, gray].forEach(m => { if (m) m.delete(); });
+    [full, small, rgb, lab, chans, grad, gradAcc, edges, kernel, Lch].forEach(m => { if (m) m.delete(); });
   }
 }
 
@@ -491,6 +646,16 @@ function estimateBackground(cv, ch) {
     let mk = Math.max(3, Math.min(31, (Math.round(k / 2) * 2 + 1)));
     med = new cv.Mat();
     cv.medianBlur(dil, med, mk);
+
+    // দ্বিতীয় পাস: ছায়ার ধারালো প্রান্ত প্রথম পাসে পুরো ধরা পড়ে না, তাই
+    // চারপাশে একটা হালকা "রিং" থেকে যায়। বড় sigma-র Gaussian দিয়ে সেই
+    // মৃদু, চওড়া অবশিষ্টাংশটুকুও ব্যাকগ্রাউন্ডের হিসাবে ঢুকিয়ে দিই।
+    const wide = new cv.Mat();
+    const sigma = Math.max(6, Math.round(Math.max(qW, qH) / 12));
+    cv.GaussianBlur(med, wide, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
+    // দুই অনুমানের গড় — ধারালো ও চওড়া, দুই মাপের আলোই ধরা পড়ে
+    cv.addWeighted(med, 0.55, wide, 0.45, 0, med);
+    wide.delete();
 
     bg = new cv.Mat();
     cv.resize(med, bg, new cv.Size(ch.cols, ch.rows), 0, 0, cv.INTER_LINEAR);

@@ -8,7 +8,9 @@ export default function PageReview({
   onAddPage, 
   onSave, 
   onExport, 
-  onBack 
+  onBack,
+  quality,
+  onQualityChange
 }) {
   const [name, setName] = useState(workingDoc.name || 'Untitled Document');
   const [objectUrls, setObjectUrls] = useState({});
@@ -82,6 +84,16 @@ export default function PageReview({
           onChange={handleNameChange}
           placeholder="Document Name"
         />
+        <select
+          className="quality-select"
+          value={quality}
+          onChange={(e) => onQualityChange(e.target.value)}
+          title="PDF কোয়ালিটি / ফাইল সাইজ"
+        >
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="small">Small</option>
+        </select>
       </div>
 
       <div className="pages-grid">

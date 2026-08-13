@@ -129,3 +129,20 @@
   animation: spinner-rotate 0.8s linear infinite;
 }
 @keyframes spinner-rotate { to { transform: rotate(360deg); } }
+
+/* কোয়ালিটি সিলেক্টর */
+.quality-select {
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.quality-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.page-review-container .header { display: flex; gap: 10px; align-items: center; }

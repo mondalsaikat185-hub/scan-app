@@ -1,4 +1,5 @@
 import { PDFDocument } from 'pdf-lib';
+import { downscaleBlob } from './canvasUtils';
 
 // A4 @ 72dpi (PDF point) — 210mm × 297mm
 export const A4_W = 595.276;
@@ -55,12 +56,13 @@ export async function makePdfBlob(canvas, filterType = 'scan') {
  * সব পেজ নিয়ে একটা মাল্টি-পেজ PDF — প্রতিটা পাতা ঠিক A4 মাপের,
  * তাই প্রিন্ট করার সময় স্কেলিং/কাটাকুটির সমস্যা হয় না।
  */
-export async function makePdfFromPages(pages) {
+export async function makePdfFromPages(pages, quality = 'high') {
   const pdfDoc = await PDFDocument.create();
 
   for (const p of pages) {
-    const bytes = new Uint8Array(await p.blob.arrayBuffer());
-    const image = await embed(pdfDoc, bytes, p.blob.type === 'image/png');
+    const blob = quality === 'high' ? p.blob : await downscaleBlob(p.blob, quality);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const image = await embed(pdfDoc, bytes, blob.type === 'image/png');
     const f = fitOnA4(image.width, image.height);
     const page = pdfDoc.addPage([f.pageW, f.pageH]);
     page.drawImage(image, { x: f.x, y: f.y, width: f.drawW, height: f.drawH });

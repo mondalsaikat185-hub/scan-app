@@ -28,3 +28,34 @@ export function canvasToBlob(canvas, filter) {
     canvas.toBlob((blob) => resolve(blob), type, quality);
   });
 }
+
+// এক্সপোর্টের মান — ইউজার বেছে নিতে পারে
+export const QUALITY_PRESETS = {
+  high:   { label: 'High',   maxDim: 2600, jpeg: 0.95 },
+  medium: { label: 'Medium', maxDim: 1800, jpeg: 0.85 },
+  small:  { label: 'Small',  maxDim: 1200, jpeg: 0.72 },
+};
+
+// একটা Blob-কে নির্দিষ্ট মানে ছোট করা (PDF ফাইল সাইজ কমাতে)
+export async function downscaleBlob(blob, preset) {
+  const p = QUALITY_PRESETS[preset] || QUALITY_PRESETS.high;
+  const bmp = await createImageBitmap(blob);
+  const long = Math.max(bmp.width, bmp.height);
+  const k = Math.min(1, p.maxDim / long);
+  if (k === 1 && preset === 'high') { bmp.close(); return blob; }
+
+  const w = Math.max(1, Math.round(bmp.width * k));
+  const h = Math.max(1, Math.round(bmp.height * k));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+
+  // সাদা-কালো স্ক্যান PNG-তেই crisp থাকে; কালার ছবিতে JPEG ছোট হয়
+  const isPng = blob.type === 'image/png';
+  return new Promise((res) => c.toBlob(
+    (b) => res(b || blob),
+    isPng && preset === 'high' ? 'image/png' : 'image/jpeg',
+    p.jpeg
+  ));
+}

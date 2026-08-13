@@ -33,6 +33,7 @@ function App() {
   const [warpedCanvas, setWarpedCanvas] = useState(null);
   const [busy, setBusy] = useState(false);
   const [pendingQueue, setPendingQueue] = useState([]);  // মাল্টি-সিলেক্টের অপেক্ষমাণ ছবি
+  const [quality, setQuality] = useState('high');        // এক্সপোর্ট মান: high | medium | small
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -70,6 +71,15 @@ function App() {
     setStep('pages');
   };
 
+  const handleRenameDoc = async (doc) => {
+    const name = window.prompt('নতুন নাম দিন:', doc.name || '');
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === doc.name) return;
+    await saveDocument({ ...doc, name: trimmed });
+    await refreshLibrary();
+  };
+
   const handleDeleteDoc = async (id) => {
     if (window.confirm("Are you sure you want to delete this document?")) {
       await deleteDocument(id);
@@ -77,10 +87,10 @@ function App() {
     }
   };
 
-  const handleExportPdf = async (pages, name) => {
+  const handleExportPdf = async (pages, name, q) => {
     if (!pages || pages.length === 0) return;
     try {
-      const blob = await makePdfFromPages(pages);
+      const blob = await makePdfFromPages(pages, q || quality);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -95,9 +105,9 @@ function App() {
     }
   };
 
-  const handleShareDoc = async (pages, name) => {
+  const handleShareDoc = async (pages, name, q) => {
     try {
-      await sharePdf(pages, name);
+      await sharePdf(pages, name, q || quality);
     } catch (err) {
       console.error(err);
       alert('Could not share.');
@@ -226,6 +236,9 @@ function App() {
           onExport={handleExportPdf}
           onDelete={handleDeleteDoc}
           onShare={handleShareDoc}
+          onRename={handleRenameDoc}
+          quality={quality}
+          onQualityChange={setQuality}
         />
       )}
 
@@ -279,6 +292,8 @@ function App() {
           onAddPage={() => setStep('input')}
           onSave={handleSaveDoc}
           onExport={(pages, name) => handleExportPdf(pages, name)}
+          quality={quality}
+          onQualityChange={setQuality}
           onBack={handleBackToLibrary}
         />
       )}

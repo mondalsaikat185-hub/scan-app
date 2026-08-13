@@ -1,10 +1,10 @@
 import { makePdfFromPages } from './makePdf';
 
 // PDF তৈরি করে শেয়ার করে; শেয়ার সম্ভব না হলে ডাউনলোড ফলব্যাক
-export async function sharePdf(pages, name) {
+export async function sharePdf(pages, name, quality = 'high') {
   if (!pages || pages.length === 0) return;
 
-  const blob = await makePdfFromPages(pages);
+  const blob = await makePdfFromPages(pages, quality);
   const fileName = `${(name || 'document').replace(/[^\w\-]+/g, '_')}.pdf`;
   const file = new File([blob], fileName, { type: 'application/pdf' });
 

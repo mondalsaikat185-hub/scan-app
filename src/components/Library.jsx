@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { forceUpdate } from '../lib/pwa';
 import './Library.css';
 
-export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare }) {
+export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare, onRename, quality, onQualityChange }) {
   const [thumbnails, setThumbnails] = useState({});
 
   useEffect(() => {
@@ -34,9 +34,21 @@ export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, o
       <div className="library-header">
         <div className="library-topbar">
           <h1>My Documents</h1>
-          <button className="update-btn" onClick={forceUpdate} title="Check for updates">
-            <span className="update-icon">↻</span> Update
-          </button>
+          <div className="topbar-actions">
+            <select
+              className="quality-select"
+              value={quality}
+              onChange={(e) => onQualityChange(e.target.value)}
+              title="PDF কোয়ালিটি / ফাইল সাইজ"
+            >
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="small">Small</option>
+            </select>
+            <button className="update-btn" onClick={forceUpdate} title="Check for updates">
+              <span className="update-icon">↻</span> Update
+            </button>
+          </div>
         </div>
         <button className="btn primary-btn new-scan-btn" onClick={onNewScan}>
           <span className="icon">➕</span> New Scan
@@ -67,6 +79,7 @@ export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, o
                 
                 <div className="doc-actions">
                   <button className="btn-small" onClick={() => onOpen(doc)}>Open</button>
+                  <button className="btn-small" onClick={() => onRename(doc)}>Rename</button>
                   <button className="btn-small" onClick={() => onExport(doc.pages, doc.name)}>Export PDF</button>
                   <button className="btn-small" onClick={() => onShare(doc.pages, doc.name)}>Share</button>
                   <button className="btn-small danger" onClick={() => onDelete(doc.id)}>Delete</button>
