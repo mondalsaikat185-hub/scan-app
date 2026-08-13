@@ -3,8 +3,8 @@ import { canvasToBlob } from '../lib/canvasUtils';
 import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
-export default function ResultView({ warpedCanvas, onReset, onAddPage }) {
-  const [filter, setFilter] = useState('magic');
+export default function ResultView({ warpedCanvas, onReset, onAddPage, initialFilter = 'magic', isEditing = false }) {
+  const [filter, setFilter] = useState(initialFilter);
   const [finalCanvas, setFinalCanvas] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const containerRef = useRef(null);
@@ -66,7 +66,7 @@ export default function ResultView({ warpedCanvas, onReset, onAddPage }) {
 
   return (
     <div className="result-view-container" ref={containerRef}>
-      <h2 className="editor-title">Enhance & Save</h2>
+      <h2 className="editor-title">{isEditing ? 'Re-edit page' : 'Enhance & Save'}</h2>
       
       <div className="filter-group">
         <button className={`filter-btn ${filter === 'magic' ? 'active' : ''}`} onClick={() => setFilter('magic')}>Color</button>

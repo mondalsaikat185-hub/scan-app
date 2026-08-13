@@ -9,7 +9,7 @@ import ImageInput from './components/ImageInput';
 import CameraScan from './components/CameraScan';
 import CornerEditor from './components/CornerEditor';
 import ResultView from './components/ResultView';
-import { scaleCanvas } from './lib/canvasUtils';
+import { scaleCanvas, blobToCanvas, originalBlobOf } from './lib/canvasUtils';
 import PageReview from './components/PageReview';
 import Library from './components/Library';
 import InstallPrompt from './components/InstallPrompt';
@@ -34,6 +34,10 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [pendingQueue, setPendingQueue] = useState([]);  // মাল্টি-সিলেক্টের অপেক্ষমাণ ছবি
   const [quality, setQuality] = useState('high');        // এক্সপোর্ট মান: high | medium | small
+  const [editingIndex, setEditingIndex] = useState(null); // কোন পেজ পুনঃসম্পাদনা হচ্ছে (null = নতুন)
+  const [originalBlob, setOriginalBlob] = useState(null); // বর্তমান স্ক্যানের আসল ছবি
+  const [lastCorners, setLastCorners] = useState(null);   // শেষ ব্যবহৃত কোণা
+  const [editFilter, setEditFilter] = useState('magic');  // এডিটের সময় আগের ফিল্টার
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -116,11 +120,13 @@ function App() {
 
   // --- Scan Flow Actions ---
   // একটা canvas নিয়ে ডিটেকশন চালিয়ে crop স্ক্রিনে যায়
-  const startCropFor = async (canvas) => {
+  const startCropFor = async (canvas, presetCorners = null, keepOriginal = null) => {
     setImageCanvas(canvas);
     setBusy(true);
     try {
-      const corners = await detectEdges(canvas);
+      // আসল ছবিটা রেখে দিই — পরে "Edit" চাপলে এখান থেকেই আবার শুরু হবে
+      setOriginalBlob(keepOriginal || await originalBlobOf(canvas));
+      const corners = presetCorners || await detectEdges(canvas);
       setInitialCorners(corners);
       setStep('crop');
     } catch (err) {
@@ -140,6 +146,7 @@ function App() {
 
   const handleCornersComplete = async (finalCorners) => {
     setBusy(true);
+    setLastCorners(finalCorners);
     try {
       const warped = await warpCanvas(imageCanvas, finalCorners);
       setWarpedCanvas(warped);
@@ -153,18 +160,29 @@ function App() {
   };
 
   const handleAddPage = (pageObj) => {
-    // Add page to working doc
-    const newDoc = {
-      ...workingDoc,
-      pages: [...workingDoc.pages, pageObj],
-      updatedAt: Date.now()
-    };
-    setWorkingDoc(newDoc);
+    // পুনঃসম্পাদনার জন্য দরকারি সব কিছু পেজের সাথেই সেভ হয়
+    const fullPage = { ...pageObj, originalBlob, corners: lastCorners };
+
+    let newPages;
+    if (editingIndex !== null && workingDoc.pages[editingIndex]) {
+      newPages = [...workingDoc.pages];
+      newPages[editingIndex] = { ...fullPage, id: workingDoc.pages[editingIndex].id };
+    } else {
+      newPages = [...workingDoc.pages, fullPage];
+    }
+    setWorkingDoc({ ...workingDoc, pages: newPages, updatedAt: Date.now() });
 
     // Clear transient states
     setImageCanvas(null);
     setInitialCorners(null);
     setWarpedCanvas(null);
+    setOriginalBlob(null);
+
+    if (editingIndex !== null) {   // এডিট শেষ — সোজা pages স্ক্রিনে
+      setEditingIndex(null);
+      setStep('pages');
+      return;
+    }
 
     // কিউতে আরও ছবি থাকলে পরেরটা শুরু করো, নাহলে pages স্ক্রিন
     if (pendingQueue.length > 0) {
@@ -180,7 +198,14 @@ function App() {
     setImageCanvas(null);
     setInitialCorners(null);
     setWarpedCanvas(null);
+    setOriginalBlob(null);
     setPendingQueue([]);  // Cancel করলে কিউও খালি
+
+    if (editingIndex !== null) {   // এডিট বাতিল — পেজ অপরিবর্তিত থাকবে
+      setEditingIndex(null);
+      setStep('pages');
+      return;
+    }
 
     // If the document has pages, go back to pages view, else library
     if (workingDoc.pages.length > 0) {
@@ -188,6 +213,30 @@ function App() {
     } else {
       setWorkingDoc(null);
       setStep('library');
+    }
+  };
+
+  // --- পেজ পুনঃসম্পাদনা ---
+  // আসল ছবি ফিরিয়ে এনে আগের কোণাসহ crop স্ক্রিনে নিয়ে যায়,
+  // সেখান থেকে ইউজার আবার ক্রপ/ফিল্টার বদলে "Update" করতে পারে।
+  const handleEditPage = async (index) => {
+    const page = workingDoc?.pages?.[index];
+    if (!page) return;
+    if (!page.originalBlob) {
+      alert('এই পেজটি পুরোনো সংস্করণে তৈরি, তাই আসল ছবি সংরক্ষিত নেই। নতুন করে স্ক্যান করুন।');
+      return;
+    }
+    setBusy(true);
+    try {
+      const canvas = await blobToCanvas(page.originalBlob);
+      setEditingIndex(index);
+      setEditFilter(page.filter || 'magic');
+      await startCropFor(canvas, page.corners || null, page.originalBlob);
+    } catch (err) {
+      console.error(err);
+      alert('আসল ছবি খোলা গেল না।');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -282,6 +331,8 @@ function App() {
           warpedCanvas={warpedCanvas}
           onAddPage={handleAddPage}
           onReset={handleCancelScan}
+          initialFilter={editingIndex !== null ? editFilter : 'magic'}
+          isEditing={editingIndex !== null}
         />
       )}
 
@@ -290,6 +341,7 @@ function App() {
           workingDoc={workingDoc}
           onUpdateDoc={handleUpdateDoc}
           onAddPage={() => setStep('input')}
+          onEditPage={handleEditPage}
           onSave={handleSaveDoc}
           onExport={(pages, name) => handleExportPdf(pages, name)}
           quality={quality}

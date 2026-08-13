@@ -59,3 +59,18 @@ export async function downscaleBlob(blob, preset) {
     p.jpeg
   ));
 }
+
+// Blob → canvas (re-edit এর জন্য আসল ছবি ফিরিয়ে আনতে)
+export async function blobToCanvas(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas');
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext('2d', { willReadFrequently: true }).drawImage(bmp, 0, 0);
+  bmp.close();
+  return c;
+}
+
+// আসল (অপ্রক্রিয়াজাত) ছবি সংরক্ষণের জন্য — মাঝারি JPEG, যাতে স্টোরেজ না ফোলে
+export function originalBlobOf(canvas) {
+  return new Promise((res) => canvas.toBlob((b) => res(b), 'image/jpeg', 0.88));
+}

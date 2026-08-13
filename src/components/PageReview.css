@@ -146,3 +146,19 @@
   font-size: 1rem;
   padding: 12px;
 }
+
+.edit-page-btn {
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  padding: 6px 12px !important;
+  border-radius: 999px !important;
+  background: rgba(59, 130, 246, 0.16) !important;
+  color: #93c5fd !important;
+  border: 1px solid rgba(59, 130, 246, 0.35) !important;
+  margin-right: auto;
+}
+.edit-page-btn:hover {
+  background: rgba(59, 130, 246, 0.28) !important;
+  color: #fff !important;
+}
+.page-footer { display: flex; align-items: center; gap: 8px; }

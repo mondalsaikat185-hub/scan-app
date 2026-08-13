@@ -448,6 +448,51 @@ function detectEdges(imageData) {
       return g * (0.25 + 0.45 * edgeSupport(q) + 0.30 * contrastScore(q));
     };
 
+
+    // ---------- ধার সূক্ষ্ম সমন্বয় (edge snapping) ----------
+    // সেরা quad পাওয়ার পরেও কোনো ধার কয়েক পিক্সেল ভেতরে/বাইরে বসতে পারে
+    // (বিশেষত উপরের ধার, যেখানে ছায়া বা কম কনট্রাস্ট থাকে)। তাই প্রতিটি ধারকে
+    // লম্বভাবে একটু সরিয়ে দেখি কোথায় সত্যিকারের edge সবচেয়ে বেশি — সেখানেই বসাই।
+    const snapEdges = (q) => {
+      const size = Math.sqrt(quadArea(q));
+      const step = Math.max(1, size * 0.006);
+      const out = q.map(p => ({ ...p }));
+      const cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
+      const cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+
+      for (let sIdx = 0; sIdx < 4; sIdx++) {
+        const i0 = sIdx, i1 = (sIdx + 1) % 4;
+        const a = out[i0], b = out[i1];
+        // ধারের লম্ব দিক (বাইরের দিকে ধনাত্মক)
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        let nx = mx - cx, ny = my - cy;
+        const nl = Math.hypot(nx, ny) || 1;
+        nx /= nl; ny /= nl;
+
+        let bestOff = 0, bestSup = -1;
+        for (let k = -8; k <= 8; k++) {
+          const off = k * step;
+          const pa = { x: a.x + nx * off, y: a.y + ny * off };
+          const pb = { x: b.x + nx * off, y: b.y + ny * off };
+          let hit = 0;
+          const N = 20;
+          for (let t = 1; t < N; t++) {
+            const f = t / N;
+            if (edgeAt(pa.x + (pb.x - pa.x) * f, pa.y + (pb.y - pa.y) * f)) hit++;
+          }
+          // সমান সমর্থন হলে কম সরানোকে প্রাধান্য
+          const sup = hit / (N - 1) - Math.abs(k) * 0.012;
+          if (sup > bestSup) { bestSup = sup; bestOff = off; }
+        }
+        if (bestOff !== 0) {
+          a.x += nx * bestOff; a.y += ny * bestOff;
+          b.x += nx * bestOff; b.y += ny * bestOff;
+        }
+      }
+      // সমন্বয়ের পর খারাপ হলে আগেরটাই রাখো
+      return totalScore(out) >= totalScore(q) ? out : q;
+    };
+
     // ---------- প্রার্থী সংগ্রহ ----------
     const candidates = [];
     const addCand = (pts) => {
@@ -533,7 +578,8 @@ function detectEdges(imageData) {
       const best = candidates[0];
       // নম্বর খুব কম হলে বিশ্বাস কোরো না
       if (best.sc >= 0.30) {
-        let q = refineGutter(cv, Lch, best.q);
+        let q = snapEdges(best.q);
+        q = refineGutter(cv, Lch, q);
         return q.map(p => ({
           x: Math.max(0, Math.min(W, p.x / scale)),
           y: Math.max(0, Math.min(H, p.y / scale)),
@@ -650,11 +696,19 @@ function estimateBackground(cv, ch) {
     // দ্বিতীয় পাস: ছায়ার ধারালো প্রান্ত প্রথম পাসে পুরো ধরা পড়ে না, তাই
     // চারপাশে একটা হালকা "রিং" থেকে যায়। বড় sigma-র Gaussian দিয়ে সেই
     // মৃদু, চওড়া অবশিষ্টাংশটুকুও ব্যাকগ্রাউন্ডের হিসাবে ঢুকিয়ে দিই।
+    // ছায়ার প্রান্তে ব্যাকগ্রাউন্ড-অনুমানে একটা ধাপ (step) তৈরি হয়, ভাগ করার পর
+    // সেটাই দৃশ্যমান "বাক্সের রেখা" হয়ে থাকে। ধাপটা নরম করতে চওড়া Gaussian-কে
+    // বেশি ওজন দিই — এতে প্রান্তরেখা মিলিয়ে যায়, ভেতরের সংশোধনও বজায় থাকে।
     const wide = new cv.Mat();
-    const sigma = Math.max(6, Math.round(Math.max(qW, qH) / 12));
+    const sigma = Math.max(10, Math.round(Math.max(qW, qH) / 7));
     cv.GaussianBlur(med, wide, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
-    // দুই অনুমানের গড় — ধারালো ও চওড়া, দুই মাপের আলোই ধরা পড়ে
-    cv.addWeighted(med, 0.55, wide, 0.45, 0, med);
+    cv.addWeighted(med, 0.3, wide, 0.7, 0, med);
+    // আরও একবার হালকা মসৃণ — যেকোনো অবশিষ্ট ধাপ মুছে দেয়
+    const soft = new cv.Mat();
+    cv.GaussianBlur(med, soft, new cv.Size(0, 0), Math.max(4, Math.round(sigma / 3)),
+                    Math.max(4, Math.round(sigma / 3)), cv.BORDER_REPLICATE);
+    soft.copyTo(med);
+    soft.delete();
     wide.delete();
 
     bg = new cv.Mat();

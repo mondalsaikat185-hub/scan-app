@@ -5,7 +5,9 @@ import './PageReview.css';
 export default function PageReview({ 
   workingDoc, 
   onUpdateDoc, 
-  onAddPage, 
+  onAddPage,
+  onEditPage,
+  
   onSave, 
   onExport, 
   onBack,
@@ -115,6 +117,11 @@ export default function PageReview({
             </div>
             
             <div className="page-footer">
+              <button
+                className="icon-btn edit-page-btn"
+                onClick={() => onEditPage(index)}
+                title="আবার ক্রপ/ফিল্টার করুন"
+              >✏️ Edit</button>
               <button 
                 className="icon-btn" 
                 onClick={() => handleMovePage(index, -1)}
