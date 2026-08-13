@@ -12,6 +12,7 @@ import ResultView from './components/ResultView';
 import { scaleCanvas } from './lib/canvasUtils';
 import PageReview from './components/PageReview';
 import Library from './components/Library';
+import InstallPrompt from './components/InstallPrompt';
 
 import './App.css';
 
@@ -33,19 +34,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [pendingQueue, setPendingQueue] = useState([]);  // মাল্টি-সিলেক্টের অপেক্ষমাণ ছবি
 
-  // PWA Install Prompt State
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [showInstallPopup, setShowInstallPopup] = useState(false);
-
   useEffect(() => {
-    // Listen for PWA install prompt
-    const handler = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setShowInstallPopup(true);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-    
     // Load OpenCV via Web Worker
     initCV()
       .then(() => setCvReady(true))
@@ -57,21 +46,7 @@ function App() {
     // Load documents
     refreshLibrary();
 
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handler);
-    };
   }, []);
-
-  const handleInstallClick = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      console.log('User accepted the A2HS prompt');
-    }
-    setDeferredPrompt(null);
-    setShowInstallPopup(false);
-  };
 
   const refreshLibrary = async () => {
     const allDocs = await getAllDocuments();
@@ -267,7 +242,10 @@ function App() {
             const scaled = scaleCanvas(canvas);
             setImageCanvas(scaled);
             if (corners) {
-              setInitialCorners(corners);
+              // ক্যানভাস রিসাইজ হলে কোণাগুলোও একই অনুপাতে সরাতে হবে,
+              // নাহলে ক্রপ বক্স ভুল জায়গায় বসবে
+              const k = scaled.width / canvas.width;
+              setInitialCorners(k === 1 ? corners : corners.map(p => ({ x: p.x * k, y: p.y * k })));
               setStep('crop');
             } else {
               await startCropFor(scaled);
@@ -306,47 +284,13 @@ function App() {
       )}
       
       {busy && (
-        <div style={{
-          position: 'fixed', top:0, left:0, right:0, bottom:0,
-          background: 'rgba(0,0,0,0.5)', zIndex: 9999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: 'white', fontSize: '1.2rem', fontWeight: 'bold'
-        }}>
-          Processing...
+        <div className="processing-overlay">
+          <span className="spinner" aria-hidden="true" />
+          Processing…
         </div>
       )}
 
-      {showInstallPopup && (
-        <div style={{
-          position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
-          background: '#0f172a', padding: '16px 24px', borderRadius: '12px',
-          display: 'flex', alignItems: 'center', gap: '16px', zIndex: 10000,
-          boxShadow: '0 10px 25px rgba(0,0,0,0.5)', border: '1px solid #334155',
-          width: 'calc(100% - 40px)', maxWidth: '400px', justifyContent: 'space-between'
-        }}>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <img src="/icon-192.png" alt="App Icon" style={{ width: '40px', height: '40px', borderRadius: '8px' }} />
-            <div>
-              <div style={{ color: 'white', fontWeight: 'bold', fontSize: '1rem' }}>Install Scan App</div>
-              <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>Fast, offline access</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button 
-              onClick={() => setShowInstallPopup(false)} 
-              style={{ background: 'transparent', color: '#94a3b8', border: 'none', padding: '8px', cursor: 'pointer' }}
-            >
-              ✕
-            </button>
-            <button 
-              onClick={handleInstallClick} 
-              style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
-            >
-              Install
-            </button>
-          </div>
-        </div>
-      )}
+      <InstallPrompt />
     </div>
   );
 }

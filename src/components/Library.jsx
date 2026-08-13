@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { forceUpdate } from '../lib/pwa';
 import './Library.css';
 
 export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare }) {
@@ -31,18 +32,10 @@ export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, o
   return (
     <div className="library-container">
       <div className="library-header">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h1 style={{ margin: 0 }}>My Documents</h1>
-          <button 
-            onClick={() => window.location.reload(true)}
-            style={{ 
-              background: 'transparent', color: '#94a3b8', border: '1px solid #334155', 
-              padding: '6px 12px', borderRadius: '20px', fontSize: '0.8rem', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: '4px'
-            }}
-            title="Check for updates"
-          >
-            <span style={{ fontSize: '1rem' }}>↻</span> Update
+        <div className="library-topbar">
+          <h1>My Documents</h1>
+          <button className="update-btn" onClick={forceUpdate} title="Check for updates">
+            <span className="update-icon">↻</span> Update
           </button>
         </div>
         <button className="btn primary-btn new-scan-btn" onClick={onNewScan}>

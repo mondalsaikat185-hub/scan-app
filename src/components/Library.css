@@ -133,3 +133,53 @@
   background-color: #7f1d1d;
   color: white;
 }
+
+/* ---------- ফেজ ৭: টপবার + আপডেট বাটন ---------- */
+.library-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.library-topbar h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #f8fafc, #94a3b8);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.update-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.update-btn:hover {
+  color: #f8fafc;
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.update-btn:active .update-icon,
+.update-btn:hover .update-icon { animation: spin 0.7s linear; }
+
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.update-icon { display: inline-block; font-size: 1rem; line-height: 1; }
