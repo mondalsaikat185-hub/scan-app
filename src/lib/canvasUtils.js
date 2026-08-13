@@ -74,3 +74,30 @@ export async function blobToCanvas(blob) {
 export function originalBlobOf(canvas) {
   return new Promise((res) => canvas.toBlob((b) => res(b), 'image/jpeg', 0.88));
 }
+
+/**
+ * canvas-কে ৯০°-এর গুণিতকে ঘোরানো (০/৯০/১৮০/২৭০)।
+ * কোনো ইন্টারপোলেশন হয় না, তাই একটুও কোয়ালিটি নষ্ট হয় না।
+ */
+export function rotateCanvas(src, deg) {
+  const d = ((deg % 360) + 360) % 360;
+  if (d === 0) return src;
+  const swap = (d === 90 || d === 270);
+  const out = document.createElement('canvas');
+  out.width = swap ? src.height : src.width;
+  out.height = swap ? src.width : src.height;
+  const ctx = out.getContext('2d');
+  ctx.translate(out.width / 2, out.height / 2);
+  ctx.rotate((d * Math.PI) / 180);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return out;
+}
+
+// Blob → ঘোরানো Blob (PageReview থেকে সরাসরি পেজ ঘোরাতে)
+export async function rotateBlob(blob, deg) {
+  const c = await blobToCanvas(blob);
+  const r = rotateCanvas(c, deg);
+  const isPng = blob.type === 'image/png';
+  return new Promise((res) => r.toBlob((b) => res(b || blob),
+    isPng ? 'image/png' : 'image/jpeg', isPng ? undefined : 0.95));
+}

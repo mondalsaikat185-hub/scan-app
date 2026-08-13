@@ -731,6 +731,13 @@ function warp(imageData, corners) {
       cur = unsheared; owned = true;
     }
 
+    //  ৩. ধারে থেকে যাওয়া গাঢ় ফালি (বেডশিট/টেবিল/ছায়া) ছেঁটে ফেলা
+    const trimmed = autoTrimBorders(cv, cur);
+    if (trimmed) {
+      if (owned) cur.delete();
+      cur = trimmed; owned = true;
+    }
+
     const res = { width: cur.cols, height: cur.rows, data: new Uint8ClampedArray(cur.data) };
     if (owned) cur.delete();
     return res;
@@ -1007,6 +1014,75 @@ function unshearText(cv, srcRgba) {
     return null;
   } finally {
     [gray, small, bin, M].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * ক্রপের পরেও ধারে থেকে যাওয়া গাঢ় ফালি ছেঁটে ফেলা।
+ *
+ * বাস্তবে কোণা নিখুঁতভাবে বসানো কঠিন — ফলে কাগজের বাইরের সামান্য অংশ
+ * (বেডশিট, টেবিল, ছায়া) সরু ফালি হয়ে ধারে থেকে যায়। এখানে প্রতিটি ধার
+ * থেকে ভেতরের দিকে এগিয়ে দেখা হয় কোন সারি/কলামগুলো কাগজের তুলনায়
+ * স্পষ্টতই গাঢ় — সেগুলোই বাদ যায়। সর্বোচ্চ ৬% পর্যন্ত, যাতে ভুল করে
+ * লেখা কেটে না যায়।
+ */
+function autoTrimBorders(cv, srcRgba) {
+  let gray = null;
+  try {
+    gray = new cv.Mat();
+    cv.cvtColor(srcRgba, gray, cv.COLOR_RGBA2GRAY, 0);
+    const W = gray.cols, H = gray.rows;
+    if (W < 60 || H < 60) return null;
+
+    // কাগজের ভেতরের সাধারণ উজ্জ্বলতা (মাঝের ৬০% থেকে)
+    const x0 = Math.floor(W * 0.2), x1 = Math.floor(W * 0.8);
+    const y0 = Math.floor(H * 0.2), y1 = Math.floor(H * 0.8);
+    const samples = [];
+    for (let y = y0; y < y1; y += 3) {
+      for (let x = x0; x < x1; x += 3) samples.push(gray.data[y * W + x]);
+    }
+    samples.sort((a, b) => a - b);
+    const paper = samples[Math.floor(samples.length * 0.7)];   // উজ্জ্বল দিকের মান
+    if (!paper) return null;
+    const darkThr = paper * 0.72;
+
+    // একটি সারি/কলাম "বাইরের" কিনা: বেশিরভাগ পিক্সেল গাঢ়
+    const rowDark = (y) => {
+      let dark = 0, n = 0;
+      for (let x = 0; x < W; x += 2) { if (gray.data[y * W + x] < darkThr) dark++; n++; }
+      return dark / n;
+    };
+    const colDark = (x) => {
+      let dark = 0, n = 0;
+      for (let y = 0; y < H; y += 2) { if (gray.data[y * W + x] < darkThr) dark++; n++; }
+      return dark / n;
+    };
+
+    const maxTrimY = Math.floor(H * 0.06), maxTrimX = Math.floor(W * 0.06);
+    const RATIO = 0.55;          // ৫৫%+ পিক্সেল গাঢ় হলে সেটা বাইরের ফালি
+
+    let top = 0;
+    while (top < maxTrimY && rowDark(top) > RATIO) top++;
+    let bottom = 0;
+    while (bottom < maxTrimY && rowDark(H - 1 - bottom) > RATIO) bottom++;
+    let left = 0;
+    while (left < maxTrimX && colDark(left) > RATIO) left++;
+    let right = 0;
+    while (right < maxTrimX && colDark(W - 1 - right) > RATIO) right++;
+
+    if (top + bottom + left + right === 0) return null;   // ছাঁটার কিছু নেই
+
+    // ছাঁটার পরেও যেন যথেষ্ট বড় থাকে
+    const nw = W - left - right, nh = H - top - bottom;
+    if (nw < W * 0.8 || nh < H * 0.8) return null;
+
+    const rect = new cv.Rect(left, top, nw, nh);
+    const cropped = srcRgba.roi(rect).clone();
+    return cropped;
+  } catch (e) {
+    return null;
+  } finally {
+    if (gray) gray.delete();
   }
 }
 

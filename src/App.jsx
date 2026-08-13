@@ -11,7 +11,7 @@ import ImageInput from './components/ImageInput';
 import CameraScan from './components/CameraScan';
 import CornerEditor from './components/CornerEditor';
 import ResultView from './components/ResultView';
-import { scaleCanvas, blobToCanvas, originalBlobOf } from './lib/canvasUtils';
+import { scaleCanvas, blobToCanvas, originalBlobOf, rotateBlob } from './lib/canvasUtils';
 import PageReview from './components/PageReview';
 import Library from './components/Library';
 import InstallPrompt from './components/InstallPrompt';
@@ -41,6 +41,7 @@ function App() {
   const [originalBlob, setOriginalBlob] = useState(null); // বর্তমান স্ক্যানের আসল ছবি
   const [lastCorners, setLastCorners] = useState(null);   // শেষ ব্যবহৃত কোণা
   const [editFilter, setEditFilter] = useState('magic');  // এডিটের সময় আগের ফিল্টার
+  const [editRotation, setEditRotation] = useState(0);    // এডিটের সময় আগের ঘূর্ণন
   const [aiOn, setAiOn] = useState(isAIEnabled());        // AI ডিটেকশন চালু?
   const [aiReady, setAiReady] = useState(false);          // মডেল ফাইল আছে?
   const [saveReq, setSaveReq] = useState(null);           // সেভ ডায়ালগের অনুরোধ
@@ -270,10 +271,34 @@ function App() {
       const canvas = await blobToCanvas(page.originalBlob);
       setEditingIndex(index);
       setEditFilter(page.filter || 'magic');
+      setEditRotation(page.rotation || 0);
       await startCropFor(canvas, page.corners || null, page.originalBlob);
     } catch (err) {
       console.error(err);
       alert('আসল ছবি খোলা গেল না।');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // পেজ রিভিউ থেকে সরাসরি ৯০° ঘোরানো — এডিটে না ঢুকেই দ্রুত ঠিক করা যায়
+  const handleRotatePage = async (index, deg) => {
+    const page = workingDoc?.pages?.[index];
+    if (!page) return;
+    setBusy(true);
+    try {
+      const rotated = await rotateBlob(page.blob, deg);
+      const newPages = [...workingDoc.pages];
+      newPages[index] = {
+        ...page,
+        blob: rotated,
+        width: page.height, height: page.width,
+        rotation: (((page.rotation || 0) + deg) % 360 + 360) % 360,
+      };
+      setWorkingDoc({ ...workingDoc, pages: newPages, updatedAt: Date.now() });
+    } catch (err) {
+      console.error(err);
+      alert('ঘোরানো গেল না।');
     } finally {
       setBusy(false);
     }
@@ -377,6 +402,7 @@ function App() {
           onBack={handleBackToCrop}
           onDiscard={handleCancelScan}
           initialFilter={editingIndex !== null ? editFilter : 'magic'}
+          initialRotation={editingIndex !== null ? editRotation : 0}
           isEditing={editingIndex !== null}
         />
       )}
@@ -387,6 +413,7 @@ function App() {
           onUpdateDoc={handleUpdateDoc}
           onAddPage={() => setStep('input')}
           onEditPage={handleEditPage}
+          onRotatePage={handleRotatePage}
           onSave={handleSaveDoc}
           onExport={(pages, name) => handleExportPdf(pages, name)}
           quality={quality}

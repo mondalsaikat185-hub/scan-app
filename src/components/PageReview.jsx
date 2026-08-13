@@ -7,6 +7,7 @@ export default function PageReview({
   onUpdateDoc, 
   onAddPage,
   onEditPage,
+  onRotatePage,
   
   onSave, 
   onExport, 
@@ -122,6 +123,8 @@ export default function PageReview({
                 onClick={() => onEditPage(index)}
                 title="আবার ক্রপ/ফিল্টার করুন"
               >✏️ Edit</button>
+              <button className="icon-btn" onClick={() => onRotatePage(index, -90)} title="বাঁদিকে ঘোরান">↺</button>
+              <button className="icon-btn" onClick={() => onRotatePage(index, 90)} title="ডানদিকে ঘোরান">↻</button>
               <button 
                 className="icon-btn" 
                 onClick={() => handleMovePage(index, -1)}

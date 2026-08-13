@@ -75,3 +75,26 @@
   flex-shrink: 0;
   padding-bottom: 14px;
 }
+
+.rotate-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+.rotate-btn {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.rotate-btn:hover { background: rgba(59, 130, 246, 0.25); border-color: #3b82f6; color: #fff; }
+.rotate-btn:active { transform: scale(0.92); }
+.rotate-label { color: #94a3b8; font-size: 0.82rem; font-weight: 700; min-width: 40px; text-align: center; }

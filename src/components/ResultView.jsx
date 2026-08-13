@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { canvasToBlob } from '../lib/canvasUtils';
+import { canvasToBlob, rotateCanvas } from '../lib/canvasUtils';
 import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
-export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage, initialFilter = 'magic', isEditing = false }) {
+export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage, initialFilter = 'magic', initialRotation = 0, isEditing = false }) {
   const [filter, setFilter] = useState(initialFilter);
+  const [rotation, setRotation] = useState(initialRotation);  // ০/৯০/১৮০/২৭০
   const [finalCanvas, setFinalCanvas] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const containerRef = useRef(null);
@@ -16,7 +17,8 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
       if (!warpedCanvas) return;
       setIsProcessing(true);
       try {
-        const result = await filterCanvas(warpedCanvas, filter);
+        const rotated = rotateCanvas(warpedCanvas, rotation);
+        const result = await filterCanvas(rotated, filter);
         if (!cancelled) setFinalCanvas(result);
       } catch (err) {
         console.error(err);
@@ -25,7 +27,7 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
       }
     })();
     return () => { cancelled = true; };
-  }, [filter, warpedCanvas]);
+  }, [filter, rotation, warpedCanvas]);
 
   useEffect(() => {
     if (!finalCanvas || !canvasRef.current || !containerRef.current) return;
@@ -52,6 +54,7 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
         id: crypto.randomUUID(),
         blob,
         filter,
+        rotation,
         width: finalCanvas.width,
         height: finalCanvas.height,
       };
@@ -73,6 +76,16 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
         <button className={`filter-btn ${filter === 'original' ? 'active' : ''}`} onClick={() => setFilter('original')}>Original</button>
         <button className={`filter-btn ${filter === 'grayscale' ? 'active' : ''}`} onClick={() => setFilter('grayscale')}>Grayscale</button>
         <button className={`filter-btn ${filter === 'scan' ? 'active' : ''}`} onClick={() => setFilter('scan')}>B&W Scan</button>
+      </div>
+
+      <div className="rotate-bar">
+        <button className="rotate-btn" onClick={() => setRotation((r) => (r + 270) % 360)} title="বাঁদিকে ঘোরান">
+          ↺
+        </button>
+        <span className="rotate-label">{rotation}°</span>
+        <button className="rotate-btn" onClick={() => setRotation((r) => (r + 90) % 360)} title="ডানদিকে ঘোরান">
+          ↻
+        </button>
       </div>
 
       <div className="canvas-wrapper">
