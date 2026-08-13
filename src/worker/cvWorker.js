@@ -718,14 +718,22 @@ function warp(imageData, corners) {
     cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_CUBIC,
                        cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
 
-    // ক্রপের পরেও লেখা সামান্য বাঁকা থাকলে সোজা করো
-    const straight = deskewMat(cv, dst);
-    if (straight) {
-      const res = { width: straight.cols, height: straight.rows, data: new Uint8ClampedArray(straight.data) };
-      straight.delete();
-      return res;
+    // ক্রপের পরে দুই ধাপ সংশোধন:
+    //  ১. deskew — লেখার লাইন অনুভূমিক করা (ঘূর্ণন)
+    //  ২. unshear — লেখার ব্লকের হেলে যাওয়া সোজা করা (শিয়ার)
+    let cur = dst, owned = false;
+    const straight = deskewMat(cv, cur);
+    if (straight) { cur = straight; owned = true; }
+
+    const unsheared = unshearText(cv, cur);
+    if (unsheared) {
+      if (owned) cur.delete();
+      cur = unsheared; owned = true;
     }
-    return { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(dst.data) };
+
+    const res = { width: cur.cols, height: cur.rows, data: new Uint8ClampedArray(cur.data) };
+    if (owned) cur.delete();
+    return res;
   } finally {
     [src, dst, srcTri, dstTri, M].forEach(m => { if (m) m.delete(); });
   }
@@ -749,7 +757,7 @@ function estimateBackground(cv, ch) {
     cv.resize(ch, small, new cv.Size(qW, qH), 0, 0, cv.INTER_AREA);
 
     // kernel ছবির মাপের সাথে মানানসই (ছোট ছবিতে ছোট, বড়তে বড়)
-    const k = Math.max(3, (Math.round(Math.max(qW, qH) / 60) * 2 + 1));
+    const k = Math.max(5, (Math.round(Math.max(qW, qH) / 32) * 2 + 1));
     kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(k, k));
     dil = new cv.Mat();
     cv.dilate(small, dil, kernel, new cv.Point(-1, -1), 1,
@@ -766,17 +774,12 @@ function estimateBackground(cv, ch) {
     // ছায়ার প্রান্তে ব্যাকগ্রাউন্ড-অনুমানে একটা ধাপ (step) তৈরি হয়, ভাগ করার পর
     // সেটাই দৃশ্যমান "বাক্সের রেখা" হয়ে থাকে। ধাপটা নরম করতে চওড়া Gaussian-কে
     // বেশি ওজন দিই — এতে প্রান্তরেখা মিলিয়ে যায়, ভেতরের সংশোধনও বজায় থাকে।
-    const wide = new cv.Mat();
-    const sigma = Math.max(10, Math.round(Math.max(qW, qH) / 7));
-    cv.GaussianBlur(med, wide, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
-    cv.addWeighted(med, 0.3, wide, 0.7, 0, med);
-    // আরও একবার হালকা মসৃণ — যেকোনো অবশিষ্ট ধাপ মুছে দেয়
+    // সামান্য মসৃণ — শুধু দানা কমাতে, ছায়ার ধাপ যেন অক্ষত থাকে
     const soft = new cv.Mat();
-    cv.GaussianBlur(med, soft, new cv.Size(0, 0), Math.max(4, Math.round(sigma / 3)),
-                    Math.max(4, Math.round(sigma / 3)), cv.BORDER_REPLICATE);
-    soft.copyTo(med);
+    const sg = Math.max(2, Math.round(Math.max(qW, qH) / 90));
+    cv.GaussianBlur(med, soft, new cv.Size(0, 0), sg, sg, cv.BORDER_REPLICATE);
+    cv.addWeighted(med, 0.25, soft, 0.75, 0, med);
     soft.delete();
-    wide.delete();
 
     bg = new cv.Mat();
     cv.resize(med, bg, new cv.Size(ch.cols, ch.rows), 0, 0, cv.INTER_LINEAR);
@@ -913,6 +916,97 @@ function deskewMat(cv, srcRgba) {
     return null;
   } finally {
     [gray, small, bin, rot, test].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * লেখার ব্লকের "হেলে যাওয়া" (shear) সংশোধন।
+ *
+ * সমস্যা: ক্রপ ও ঘূর্ণন ঠিক হওয়ার পরেও অনেক সময় দেখা যায় লেখা উপর থেকে
+ * নিচে যেতে যেতে ক্রমশ ডান/বাঁ দিকে সরে যাচ্ছে — অর্থাৎ লেখার বাঁ মার্জিন
+ * কাগজের ধারের সমান্তরাল নয়। এটা ঘূর্ণন নয়, তাই deskew ধরতে পারে না।
+ *
+ * সমাধান: প্রতিটি সারিতে লেখার বাঁ ও ডান প্রান্ত খুঁজে, সেই প্রান্তরেখার
+ * ঢাল বের করা হয়। দুই পাশের ঢাল কাছাকাছি হলে (মানে সত্যিই পুরো ব্লক হেলে
+ * আছে, ছন্নছাড়া লেখা নয়) তখনই একটা shear রূপান্তর প্রয়োগ করা হয়।
+ */
+function unshearText(cv, srcRgba) {
+  let gray = null, small = null, bin = null, M = null, out = null;
+  try {
+    gray = new cv.Mat();
+    cv.cvtColor(srcRgba, gray, cv.COLOR_RGBA2GRAY, 0);
+    const TW = 600;
+    const k = Math.min(1, TW / Math.max(1, gray.cols));
+    small = new cv.Mat();
+    cv.resize(gray, small, new cv.Size(Math.max(8, Math.round(gray.cols * k)),
+                                      Math.max(8, Math.round(gray.rows * k))), 0, 0, cv.INTER_AREA);
+    bin = new cv.Mat();
+    cv.threshold(small, bin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+    const W = bin.cols, H = bin.rows;
+    const BANDS = 28;
+    const lefts = [], rights = [];
+    for (let b = 0; b < BANDS; b++) {
+      const y0 = Math.floor((H * b) / BANDS), y1 = Math.floor((H * (b + 1)) / BANDS);
+      let minX = W, maxX = -1, count = 0;
+      for (let y = y0; y < y1; y++) {
+        const off = y * W;
+        for (let x = 0; x < W; x++) {
+          if (bin.data[off + x]) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            count++;
+          }
+        }
+      }
+      // যথেষ্ট লেখা আছে এমন ব্যান্ডই গোনা হবে
+      if (count > (y1 - y0) * 2 && maxX > minX) {
+        const yc = (y0 + y1) / 2;
+        lefts.push({ y: yc, x: minX });
+        rights.push({ y: yc, x: maxX });
+      }
+    }
+    if (lefts.length < 8) return null;
+
+    // ঢাল নির্ণয় (dx/dy) — বহিরাগত মান এড়াতে মধ্যক-ভিত্তিক
+    const slopeOf = (pts) => {
+      const sl = [];
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 3; j < pts.length; j++) {
+          const dy = pts[j].y - pts[i].y;
+          if (Math.abs(dy) < 1) continue;
+          sl.push((pts[j].x - pts[i].x) / dy);
+        }
+      }
+      if (sl.length < 5) return null;
+      sl.sort((a, b) => a - b);
+      return sl[Math.floor(sl.length / 2)];
+    };
+
+    const sL = slopeOf(lefts), sR = slopeOf(rights);
+    if (sL === null || sR === null) return null;
+
+    // দুই পাশের ঢাল একই দিকে ও কাছাকাছি হলে তবেই বিশ্বাস
+    if (sL * sR <= 0) return null;
+    const diff = Math.abs(sL - sR) / Math.max(Math.abs(sL), Math.abs(sR));
+    if (diff > 0.5) return null;
+
+    const slope = (sL + sR) / 2;
+    const deg = Math.atan(slope) * 180 / Math.PI;
+    if (Math.abs(deg) < 0.4 || Math.abs(deg) > 8) return null;   // নগণ্য বা সন্দেহজনক
+
+    // shear ম্যাট্রিক্স: x' = x - slope*(y - yc)
+    const yc = srcRgba.rows / 2;
+    M = cv.matFromArray(2, 3, cv.CV_64F, [1, -slope, slope * yc, 0, 1, 0]);
+    out = new cv.Mat();
+    cv.warpAffine(srcRgba, out, M, new cv.Size(srcRgba.cols, srcRgba.rows),
+                  cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
+    return out;
+  } catch (e) {
+    if (out) { out.delete(); }
+    return null;
+  } finally {
+    [gray, small, bin, M].forEach(m => { if (m) m.delete(); });
   }
 }
 
