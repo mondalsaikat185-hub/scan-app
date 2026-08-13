@@ -62,6 +62,11 @@ export async function sharpnessOf(canvas) {
   return call('sharpness', { imageData: img }, [img.data.buffer]);
 }
 
+// AI mask → কোণা (OpenCV worker-এ)
+export async function quadFromMask(mask, size, w, h) {
+  return call('quadFromMask', { mask, size, w, h }, [mask.buffer]);
+}
+
 export async function filterCanvas(canvas, filter) {
   if (filter === 'original') return canvas;
   const img = canvasToImageData(canvas);

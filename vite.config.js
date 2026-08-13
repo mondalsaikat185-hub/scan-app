@@ -10,8 +10,17 @@ export default defineConfig({
       includeAssets: ['icon-192.png', 'icon-512.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
-        globIgnores: ['**/opencv.js'],
+        globIgnores: ['**/opencv.js', '**/models/*.onnx', '**/ort/*'],
         runtimeCaching: [{
+          // AI মডেল ও onnxruntime — একবার নামলে অফলাইনেও থাকবে
+          urlPattern: ({ url }) => url.pathname.startsWith('/models/') || url.pathname.startsWith('/ort/'),
+          handler: 'CacheFirst',
+          options: {
+            cacheName: 'ai-cache',
+            expiration: { maxEntries: 12, maxAgeSeconds: 60 * 60 * 24 * 180 },
+            cacheableResponse: { statuses: [0, 200] },
+          },
+        }, {
           urlPattern: ({ url }) => url.pathname.endsWith('/opencv.js'),
           handler: 'CacheFirst',
           options: {

@@ -598,6 +598,73 @@ function detectEdges(imageData) {
   }
 }
 
+/**
+ * AI mask থেকে কাগজের চার কোণা বের করা।
+ * মডেল বলে "কোন পিক্সেল কাগজ"; এখানে সেই আকৃতির সীমানা থেকে
+ * সবচেয়ে মানানসই চতুর্ভুজ বের করা হয় — mask ঝাপসা হলেও কাজ করে।
+ */
+function quadFromMask(maskData, maskSize, targetW, targetH) {
+  const cv = self.cv;
+  let m = null, big = null, bin = null, kernel = null, contours = null, hier = null;
+  try {
+    // Float mask → 8-bit Mat
+    m = new cv.Mat(maskSize, maskSize, cv.CV_8UC1);
+    for (let i = 0; i < maskSize * maskSize; i++) m.data[i] = Math.round(maskData[i] * 255);
+
+    // আসল ছবির মাপে বড় করা
+    big = new cv.Mat();
+    cv.resize(m, big, new cv.Size(targetW, targetH), 0, 0, cv.INTER_LINEAR);
+
+    // Otsu দিয়ে কাগজ/পটভূমি আলাদা
+    bin = new cv.Mat();
+    cv.threshold(big, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    // ছোট ফাঁক বোজানো
+    const k = Math.max(3, Math.round(Math.min(targetW, targetH) / 120) * 2 + 1);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(k, k));
+    cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 1,
+                    cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+
+    contours = new cv.MatVector(); hier = new cv.Mat();
+    cv.findContours(bin, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    let bestIdx = -1, bestArea = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const a = cv.contourArea(cnt);
+      if (a > bestArea) { bestArea = a; bestIdx = i; }
+      cnt.delete();
+    }
+    if (bestIdx < 0 || bestArea < targetW * targetH * 0.12) return null;
+
+    const best = contours.get(bestIdx);
+    const hull = new cv.Mat(), poly = new cv.Mat();
+    cv.convexHull(best, hull, false, true);
+    let pts = null;
+    for (const eps of [0.02, 0.03, 0.05]) {
+      cv.approxPolyDP(hull, poly, eps * cv.arcLength(hull, true), true);
+      if (poly.rows === 4) {
+        pts = [];
+        for (let i = 0; i < 4; i++) pts.push({ x: poly.data32S[i * 2], y: poly.data32S[i * 2 + 1] });
+        break;
+      }
+    }
+    if (!pts) {                       // ৪ কোণা না মিললে ঘোরানো আয়তক্ষেত্র
+      const rr = cv.minAreaRect(best);
+      pts = cv.RotatedRect.points(rr).map(p => ({ x: p.x, y: p.y }));
+    }
+    best.delete(); hull.delete(); poly.delete();
+
+    return orderPoints(pts).map(p => ({
+      x: Math.max(0, Math.min(targetW, p.x)),
+      y: Math.max(0, Math.min(targetH, p.y)),
+    }));
+  } catch (e) {
+    return null;
+  } finally {
+    [m, big, bin, kernel, contours, hier].forEach(x => { if (x) x.delete(); });
+  }
+}
+
 function warp(imageData, corners) {
   const cv = self.cv;
   let src = null, dst = null, srcTri = null, dstTri = null, M = null;
@@ -934,6 +1001,7 @@ self.onmessage = async (e) => {
     else if (type === 'warp')   result = warp(payload.imageData, payload.corners);
     else if (type === 'filter') result = applyFilter(payload.imageData, payload.filter);
     else if (type === 'sharpness') result = sharpnessScore(payload.imageData);
+    else if (type === 'quadFromMask') result = quadFromMask(payload.mask, payload.size, payload.w, payload.h);
     else throw new Error('Unknown message type: ' + type);
 
     // ImageData-জাতীয় ফল হলে buffer transfer করো (দ্রুত, কপি ছাড়া)

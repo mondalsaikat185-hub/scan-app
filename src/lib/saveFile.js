@@ -20,10 +20,10 @@ function sanitize(name) {
 /**
  * @returns {'saved'|'downloaded'|'cancelled'}
  */
-export async function savePdfBlob(blob, name) {
+export async function savePdfBlob(blob, name, destination = 'auto') {
   const fileName = `${sanitize(name)}.pdf`;
 
-  if (canPickLocation()) {
+  if (destination !== 'download' && (destination === 'pick' || destination === 'auto') && canPickLocation()) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: fileName,

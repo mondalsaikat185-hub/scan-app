@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { initCV, detectEdges, warpCanvas } from './lib/cvClient';
+import { initCV, detectEdges, warpCanvas, quadFromMask } from './lib/cvClient';
+import { segmentDocument, isAIEnabled, setAIEnabled, isModelAvailable } from './lib/aiDetect';
 import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
@@ -14,6 +15,7 @@ import { scaleCanvas, blobToCanvas, originalBlobOf } from './lib/canvasUtils';
 import PageReview from './components/PageReview';
 import Library from './components/Library';
 import InstallPrompt from './components/InstallPrompt';
+import SaveDialog from './components/SaveDialog';
 
 import './App.css';
 
@@ -39,6 +41,9 @@ function App() {
   const [originalBlob, setOriginalBlob] = useState(null); // বর্তমান স্ক্যানের আসল ছবি
   const [lastCorners, setLastCorners] = useState(null);   // শেষ ব্যবহৃত কোণা
   const [editFilter, setEditFilter] = useState('magic');  // এডিটের সময় আগের ফিল্টার
+  const [aiOn, setAiOn] = useState(isAIEnabled());        // AI ডিটেকশন চালু?
+  const [aiReady, setAiReady] = useState(false);          // মডেল ফাইল আছে?
+  const [saveReq, setSaveReq] = useState(null);           // সেভ ডায়ালগের অনুরোধ
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -51,6 +56,9 @@ function App() {
       
     // Load documents
     refreshLibrary();
+
+    // AI মডেল আছে কিনা দেখে নিই (না থাকলে চুপচাপ ক্লাসিক পদ্ধতিই চলবে)
+    isModelAvailable().then(setAiReady);
 
   }, []);
 
@@ -92,25 +100,28 @@ function App() {
     }
   };
 
-  const handleExportPdf = async (pages, name, q) => {
+  // Export চাপলে সরাসরি সেভ নয় — আগে ডায়ালগ (নাম + মান + গন্তব্য)
+  const handleExportPdf = (pages, name) => {
     if (!pages || pages.length === 0) return;
-    // সেভের আগে নাম জিজ্ঞেস করি — ইউজার চাইলে বদলাতে পারে
-    const suggested = name || 'document';
-    const chosen = window.prompt('ফাইলের নাম দিন:', suggested);
-    if (chosen === null) return;               // বাতিল
-    const finalName = chosen.trim() || suggested;
+    setSaveReq({ pages, name: name || 'document' });
+  };
 
+  // ডায়ালগে ইউজার সব ঠিক করে দিলে তবেই আসল কাজ
+  const doSave = async ({ name, quality: q, destination }) => {
+    const req = saveReq;
+    setSaveReq(null);
+    if (!req) return;
     setBusy(true);
     try {
-      const blob = await makePdfFromPages(pages, q || quality);
-      const res = await savePdfBlob(blob, finalName);
-      if (res === 'downloaded' && !canPickLocation()) {
-        // ফোনে ফোল্ডার-পিকার নেই — ইউজারকে জানিয়ে রাখি
-        console.log('Saved to browser downloads folder');
+      if (destination === 'share') {
+        await sharePdf(req.pages, name, q);
+        return;
       }
+      const blob = await makePdfFromPages(req.pages, q);
+      await savePdfBlob(blob, name, destination);
     } catch (err) {
-      console.error("Export error", err);
-      alert("PDF সেভ করা গেল না।");
+      console.error('Save error', err);
+      alert('PDF সেভ করা গেল না।');
     } finally {
       setBusy(false);
     }
@@ -133,7 +144,20 @@ function App() {
     try {
       // আসল ছবিটা রেখে দিই — পরে "Edit" চাপলে এখান থেকেই আবার শুরু হবে
       setOriginalBlob(keepOriginal || await originalBlobOf(canvas));
-      const corners = presetCorners || await detectEdges(canvas);
+      let corners = presetCorners;
+      if (!corners) {
+        // ১. AI চেষ্টা (রঙিন/এলোমেলো ব্যাকগ্রাউন্ডে অনেক ভালো)
+        if (aiOn && aiReady) {
+          try {
+            const seg = await segmentDocument(canvas);
+            if (seg) {
+              corners = await quadFromMask(seg.mask, seg.size, canvas.width, canvas.height);
+            }
+          } catch (e) { console.warn('AI detect skipped', e); }
+        }
+        // ২. না পারলে ক্লাসিক OpenCV পদ্ধতি
+        if (!corners) corners = await detectEdges(canvas);
+      }
       setInitialCorners(corners);
       setStep('crop');
     } catch (err) {
@@ -295,6 +319,9 @@ function App() {
           onRename={handleRenameDoc}
           quality={quality}
           onQualityChange={setQuality}
+          aiOn={aiOn}
+          aiReady={aiReady}
+          onAiToggle={(v) => { setAIEnabled(v); setAiOn(v); }}
         />
       )}
 
@@ -362,6 +389,15 @@ function App() {
           <span className="spinner" aria-hidden="true" />
           Processing…
         </div>
+      )}
+
+      {saveReq && (
+        <SaveDialog
+          defaultName={saveReq.name}
+          defaultQuality={quality}
+          onCancel={() => setSaveReq(null)}
+          onConfirm={doSave}
+        />
       )}
 
       <InstallPrompt />

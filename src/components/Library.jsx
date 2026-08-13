@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { forceUpdate } from '../lib/pwa';
 import './Library.css';
 
-export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare, onRename, quality, onQualityChange }) {
+export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, onShare, onRename, quality, onQualityChange, aiOn, aiReady, onAiToggle }) {
   const [thumbnails, setThumbnails] = useState({});
 
   useEffect(() => {
@@ -45,6 +45,15 @@ export default function Library({ docs, onNewScan, onOpen, onExport, onDelete, o
               <option value="medium">Medium</option>
               <option value="small">Small</option>
             </select>
+            {aiReady && (
+              <button
+                className={`ai-toggle ${aiOn ? 'on' : ''}`}
+                onClick={() => onAiToggle(!aiOn)}
+                title="AI ডিটেকশন — এলোমেলো ব্যাকগ্রাউন্ডে কাগজ চিনতে সাহায্য করে"
+              >
+                ✨ AI {aiOn ? 'On' : 'Off'}
+              </button>
+            )}
             <button className="update-btn" onClick={forceUpdate} title="Check for updates">
               <span className="update-icon">↻</span> Update
             </button>

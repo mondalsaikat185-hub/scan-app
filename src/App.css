@@ -146,3 +146,22 @@
 .quality-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .page-review-container .header { display: flex; gap: 10px; align-items: center; }
+
+.ai-toggle {
+  flex-shrink: 0;
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid var(--line);
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ai-toggle.on {
+  background: linear-gradient(135deg, rgba(59,130,246,0.25), rgba(74,222,128,0.18));
+  color: #dbeafe;
+  border-color: rgba(59, 130, 246, 0.5);
+}
