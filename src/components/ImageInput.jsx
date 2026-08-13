@@ -1,7 +1,6 @@
 import React, { useRef, useState } from 'react';
+import { scaleCanvas } from '../lib/canvasUtils';
 import './ImageInput.css';
-
-const MAX_DIM = 2600;
 
 // একটা File → রিসাইজ করা canvas
 function fileToCanvas(file) {
@@ -11,25 +10,20 @@ function fileToCanvas(file) {
     img.onload = () => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      let width = img.width, height = img.height;
-      const longSide = Math.max(width, height);
-      if (longSide > MAX_DIM) {
-        const s = MAX_DIM / longSide;
-        width = Math.round(width * s);
-        height = Math.round(height * s);
-      }
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, 0, 0, width, height);
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0, img.width, img.height);
       URL.revokeObjectURL(url);
-      resolve(canvas);
+      
+      const scaledCanvas = scaleCanvas(canvas);
+      resolve(scaledCanvas);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not load image')); };
     img.src = url;
   });
 }
 
-export default function ImageInput({ onImagesLoaded }) {
+export default function ImageInput({ onImagesLoaded, onOpenCamera }) {
   const cameraInputRef = useRef(null);
   const galleryInputRef = useRef(null);
   const [loading, setLoading] = useState(false);
@@ -59,7 +53,7 @@ export default function ImageInput({ onImagesLoaded }) {
       </div>
 
       <div className="button-group">
-        <button className="btn primary-btn" onClick={() => cameraInputRef.current?.click()} disabled={loading}>
+        <button className="btn primary-btn" onClick={onOpenCamera} disabled={loading}>
           <span className="icon">📷</span>
           {loading ? 'Loading…' : 'Open Camera'}
         </button>
@@ -71,14 +65,6 @@ export default function ImageInput({ onImagesLoaded }) {
       <p className="hint-text">গ্যালারি থেকে একসাথে একাধিক পেজ বাছাই করা যায়</p>
 
       {/* Hidden Inputs */}
-      <input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        ref={cameraInputRef}
-        onChange={handleImageChange}
-        className="hidden-input"
-      />
       <input
         type="file"
         accept="image/*"

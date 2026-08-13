@@ -29,6 +29,52 @@ function matFromImageData(imageData) {
   return m;
 }
 
+// বইয়ের ভাঁজ: quad-এর ভেতরে লম্বা প্রায়-উল্লম্ব রেখা খুঁজে ধার সরাও
+function refineGutter(cv, edgesMat, quad) {
+  let lines = null;
+  try {
+    const qH = Math.max(
+      Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y),
+      Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y)
+    );
+    const qW = Math.max(
+      Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y),
+      Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y)
+    );
+    lines = new cv.Mat();
+    // লম্বা রেখাই চাই: minLineLength = quad উচ্চতার ৬৫%
+    cv.HoughLinesP(edgesMat, lines, 1, Math.PI / 180, 60, qH * 0.65, qH * 0.08);
+
+    const minX = Math.min(...quad.map(p => p.x)), maxX = Math.max(...quad.map(p => p.x));
+    let best = null; // {x, len}
+    for (let i = 0; i < lines.rows; i++) {
+      const x1 = lines.data32S[i*4], y1 = lines.data32S[i*4+1];
+      const x2 = lines.data32S[i*4+2], y2 = lines.data32S[i*4+3];
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      // প্রায়-উল্লম্ব? (উল্লম্ব থেকে ±12°)
+      if (Math.abs(dx) > Math.abs(dy) * 0.21) continue;
+      const midX = (x1 + x2) / 2;
+      const t = (midX - minX) / (maxX - minX); // quad-প্রস্থে অবস্থান 0..1
+      // quad-এর ভেতরের দিকে (ধার থেকে দূরে) — ১৫%..৮৫%
+      if (t < 0.15 || t > 0.85) continue;
+      if (!best || len > best.len) best = { x: midX, t, len };
+    }
+    if (!best) return quad;
+
+    // কোন ধার সরবে? রেখা যেদিকে কাছে সেদিকের ধার
+    const moveLeft = best.t < 0.5;
+    const refined = quad.map(p => ({ ...p }));
+    if (moveLeft) { refined[0].x = best.x; refined[3].x = best.x; }  // TL, BL
+    else          { refined[1].x = best.x; refined[2].x = best.x; }  // TR, BR
+    return refined;
+  } catch (e) {
+    return quad; // কোনো সমস্যায় আগেরটাই
+  } finally {
+    if (lines) lines.delete();
+  }
+}
+
 function detectEdges(imageData) {
   const cv = self.cv;
   const W = imageData.width, H = imageData.height;
@@ -136,25 +182,33 @@ function detectEdges(imageData) {
     harvest(dil, imgArea);
 
     // --- পদ্ধতি ২: Canny কড়া threshold ---
-    cv.Canny(blur, edges, 100, 250);
-    cv.dilate(edges, dil, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
-    harvest(dil, imgArea);
+    let edges2 = new cv.Mat(), dil2 = new cv.Mat();
+    cv.Canny(blur, edges2, 100, 250);
+    cv.dilate(edges2, dil2, M, new cv.Point(-1, -1), 2, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+    harvest(dil2, imgArea);
 
     // --- পদ্ধতি ৩: Otsu binary (উজ্জ্বল কাগজ vs গাঢ় ব্যাকগ্রাউন্ড) ---
     let bin = new cv.Mat();
     cv.threshold(blur, bin, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
     harvest(bin, imgArea);
 
-    M.delete(); blur.delete(); edges.delete(); dil.delete(); bin.delete();
+    M.delete(); blur.delete(); edges2.delete(); dil.delete(); dil2.delete(); bin.delete();
 
     if (candidates.length > 0) {
       candidates.sort((a, b) => b.score - a.score);
-      const bestPts = orderPoints(candidates[0].pts).map(p => ({
+      let bestQuadSmall = orderPoints(candidates[0].pts);
+      // Gutter refinement using edges from method 1
+      bestQuadSmall = refineGutter(cv, edges, bestQuadSmall);
+
+      const bestPts = bestQuadSmall.map(p => ({
         x: Math.max(0, Math.min(W, p.x / scale)),
         y: Math.max(0, Math.min(H, p.y / scale)),
       }));
+      edges.delete();
       return bestPts;
     }
+    
+    edges.delete();
     // কিছুই না পেলে — ৫% মার্জিনে default
     const mx = W * 0.05, my = H * 0.05;
     return [{x:mx,y:my},{x:W-mx,y:my},{x:W-mx,y:H-my},{x:mx,y:H-my}];
