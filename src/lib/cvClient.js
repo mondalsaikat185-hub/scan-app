@@ -56,6 +56,12 @@ export async function warpCanvas(canvas, corners) {
   return resultToCanvas(res);
 }
 
+// ছবির ধারালোতা (Laplacian variance) — ঝাপসা হলে কম
+export async function sharpnessOf(canvas) {
+  const img = canvasToImageData(canvas);
+  return call('sharpness', { imageData: img }, [img.data.buffer]);
+}
+
 export async function filterCanvas(canvas, filter) {
   if (filter === 'original') return canvas;
   const img = canvasToImageData(canvas);

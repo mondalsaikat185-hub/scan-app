@@ -1,11 +1,44 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { detectEdges } from '../lib/cvClient';
+import { detectEdges, sharpnessOf } from '../lib/cvClient';
 import './CameraScan.css';
 
 const DETECT_W = 640;        // ডিটেকশন ফ্রেমের প্রস্থ (বেশি = নির্ভুল, কম = দ্রুত)
-const STABLE_FRAMES = 6;     // পরপর কত ফ্রেম স্থির হলে অটো-ক্যাপচার
-const STABLE_TOL = 0.030;    // নড়াচড়ার সীমা (quad-এর নিজের মাপের অনুপাতে)
-const SMOOTH = 0.45;         // EMA — ওভারলের কাঁপুনি কমায় (0=জমে থাকা, 1=কাঁচা)
+const STABLE_FRAMES = 7;     // পরপর কত ফ্রেম স্থির হলে অটো-ক্যাপচার
+const STABLE_TOL = 0.028;    // নড়াচড়ার সীমা (quad-এর নিজের মাপের অনুপাতে)
+const SMOOTH = 0.5;          // EMA — ওভারলের কাঁপুনি কমায়
+const HISTORY = 5;           // কত ফ্রেমের মধ্যক (median) নেওয়া হবে
+const OUTLIER_TOL = 0.14;    // মধ্যক থেকে এত দূরের ফ্রেম "বিক্ষিপ্ত" ধরে বাদ
+const MIN_SHARPNESS = 55;    // এর নিচে হলে ছবি ঝাপসা — অটো-ক্যাপচার আটকাবে
+
+// কয়েক ফ্রেমের কোণার মধ্যক (median) — একটা-দুটো ভুল ফ্রেম ফেলে দেয়।
+// গড়ের চেয়ে মধ্যক অনেক বেশি নির্ভরযোগ্য: একটা ফ্রেম বাজেভাবে ভুল হলেও ফল নড়ে না।
+function medianQuad(list) {
+  if (list.length === 1) return list[0];
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    const xs = list.map(q => q[i].x).sort((a, b) => a - b);
+    const ys = list.map(q => q[i].y).sort((a, b) => a - b);
+    const m = Math.floor(list.length / 2);
+    out.push({
+      x: list.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2,
+      y: list.length % 2 ? ys[m] : (ys[m - 1] + ys[m]) / 2,
+    });
+  }
+  return out;
+}
+
+// দুটো quad কতটা আলাদা (quad-এর মাপের অনুপাতে)
+function quadDiff(a, b) {
+  const size = Math.max(
+    Math.hypot(a[1].x - a[0].x, a[1].y - a[0].y),
+    Math.hypot(a[3].x - a[0].x, a[3].y - a[0].y)
+  ) || 1;
+  let worst = 0;
+  for (let i = 0; i < 4; i++) {
+    worst = Math.max(worst, Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y));
+  }
+  return worst / size;
+}
 
 // quad আদৌ বিশ্বাসযোগ্য কিনা: যথেষ্ট বড়, উত্তল, স্বাভাবিক অনুপাত
 function isPlausible(quad, w, h) {
@@ -61,6 +94,9 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
   const lastQuadRef = useRef(null);
   const stableCountRef = useRef(0);
   const smoothQuadRef = useRef(null);
+  const historyRef = useRef([]);
+  const sharpCheckRef = useRef(false);
+  const blurCountRef = useRef(0);
   const capturingRef = useRef(false);
   const [err, setErr] = useState(null);
   const [stablePct, setStablePct] = useState(0);
@@ -148,13 +184,28 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       stableCountRef.current = 0;
       smoothQuadRef.current = null;
       lastQuadRef.current = null;
+      historyRef.current = [];
       setStablePct(0);
       setHint('কাগজ পুরোটা ফ্রেমে আনুন');
       return null;
     }
 
+    // ---- ইতিহাসে যোগ, তারপর মধ্যক ----
+    const hist = historyRef.current;
+    hist.push(rawQuad);
+    if (hist.length > HISTORY) hist.shift();
+    const med = medianQuad(hist);
+
+    // ---- বিক্ষিপ্ত ফ্রেম বাদ: মধ্যক থেকে বহু দূরে হলে এই ফ্রেম উপেক্ষা ----
+    if (hist.length >= 3 && quadDiff(med, rawQuad) > OUTLIER_TOL) {
+      hist.pop();                       // বাজে ফ্রেম ইতিহাসে ঢুকতে দিও না
+      stableCountRef.current = Math.max(0, stableCountRef.current - 1);
+      setHint('একটু নড়ছে…');
+      return smoothQuadRef.current;     // আগের ভালো সীমানাই দেখাও
+    }
+
     const prevSmooth = smoothQuadRef.current;
-    const smooth = blendQuad(prevSmooth, rawQuad, prevSmooth ? SMOOTH : 1);
+    const smooth = blendQuad(prevSmooth, med, prevSmooth ? SMOOTH : 1);
     smoothQuadRef.current = smooth;
 
     const prev = lastQuadRef.current;
@@ -166,7 +217,6 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       return smooth;
     }
 
-    // সহনশীলতা quad-এর নিজের মাপের অনুপাতে (দূরের ছোট কাগজে কড়া, কাছের বড়তে শিথিল)
     const size = Math.max(
       Math.hypot(smooth[1].x - smooth[0].x, smooth[1].y - smooth[0].y),
       Math.hypot(smooth[3].x - smooth[0].x, smooth[3].y - smooth[0].y)
@@ -174,13 +224,40 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
     const tol = Math.max(4, size * STABLE_TOL);
     const stable = smooth.every((p, i) => Math.hypot(p.x - prev[i].x, p.y - prev[i].y) < tol);
 
-    stableCountRef.current = stable ? stableCountRef.current + 1 : 1;
+    stableCountRef.current = stable ? stableCountRef.current + 1 : Math.max(0, stableCountRef.current - 1);
     const pct = Math.min(100, Math.round((stableCountRef.current / STABLE_FRAMES) * 100));
     setStablePct(pct);
-    setHint(stable ? 'স্থির রাখুন…' : 'একটু নড়ছে…');
+    setHint(stable ? (pct > 60 ? 'প্রায় হয়ে গেছে…' : 'স্থির রাখুন…') : 'একটু নড়ছে…');
 
-    if (stableCountRef.current >= STABLE_FRAMES) capture(smooth);
+    // ইতিহাস পুরো ভরার আগে ক্যাপচার নয় — তাড়াহুড়োয় ভুল ফ্রেম যাতে না যায়
+    if (stableCountRef.current >= STABLE_FRAMES && hist.length >= HISTORY) {
+      tryCaptureIfSharp(smooth);
+    }
     return smooth;
+  };
+
+  // ---- ঝাপসা হলে ক্যাপচার আটকাও ----
+  // নড়া হাতে তোলা ছবি স্ক্যানের সবচেয়ে বড় শত্রু। কোণা স্থির মানেই ছবি ধারালো নয়
+  // (ধীরে নড়লেও কোণা স্থির দেখাতে পারে), তাই ক্যাপচারের ঠিক আগে ধারালোতা মাপি।
+  const tryCaptureIfSharp = async (smooth) => {
+    if (capturingRef.current || sharpCheckRef.current) return;
+    sharpCheckRef.current = true;
+    try {
+      const dc = detectCanvasRef.current;
+      const score = await sharpnessOf(dc);
+      if (capturingRef.current) return;
+      if (score < MIN_SHARPNESS) {
+        blurCountRef.current++;
+        stableCountRef.current = Math.max(0, STABLE_FRAMES - 3);
+        setHint('একটু ঝাপসা — স্থির ধরুন');
+        return;
+      }
+      capture(smooth);
+    } catch (e) {
+      capture(smooth);   // মাপা না গেলে আটকাব না
+    } finally {
+      sharpCheckRef.current = false;
+    }
   };
 
   // ---- ওভারলে আঁকা ----

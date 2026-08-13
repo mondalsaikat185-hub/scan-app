@@ -56,16 +56,17 @@ function refineGutter(cv, graySmall, quad) {
     cv.warpPerspective(graySmall, rect, M, new cv.Size(RW, RH), cv.INTER_LINEAR,
                        cv.BORDER_REPLICATE, new cv.Scalar());
 
-    // কলামভিত্তিক গড় উজ্জ্বলতা (মাঝের ৮০% সারি — উপর/নিচের ছায়া বাদ)
-    const y0 = Math.floor(RH * 0.1), y1 = Math.floor(RH * 0.9);
+    const y0 = Math.floor(RH * 0.12), y1 = Math.floor(RH * 0.88);
     const rows = y1 - y0;
+
+    // কলামভিত্তিক গড় উজ্জ্বলতা
     const prof = new Float64Array(RW);
     for (let x = 0; x < RW; x++) {
       let sum = 0;
       for (let y = y0; y < y1; y++) sum += rect.data[y * RW + x];
       prof[x] = sum / rows;
     }
-    // মসৃণ করা (±4 কলাম)
+    // মসৃণ করা
     const sm = new Float64Array(RW);
     const R = 4;
     for (let x = 0; x < RW; x++) {
@@ -77,36 +78,79 @@ function refineGutter(cv, graySmall, quad) {
       sm[x] = s / n;
     }
 
-    // মাঝের ২৫%–৭৫% এলাকায় সবচেয়ে গাঢ় কলাম
-    const a = Math.floor(RW * 0.25), b = Math.floor(RW * 0.75);
+    // ---------- কড়া শর্ত ১: অবস্থান মাঝামাঝি (৩০%–৭০%) ----------
+    // (আগে ২৫–৭৫ ছিল; ভাঁজ প্রায় সবসময় মাঝ বরাবরই থাকে)
+    const a = Math.floor(RW * 0.30), b = Math.floor(RW * 0.70);
     let vx = -1, vmin = Infinity;
     for (let x = a; x < b; x++) if (sm[x] < vmin) { vmin = sm[x]; vx = x; }
     if (vx < 0) return quad;
 
-    // পাতার সাধারণ উজ্জ্বলতা = প্রোফাইলের মধ্যক
     const sorted = Array.from(sm).sort((p, q) => p - q);
     const median = sorted[Math.floor(sorted.length / 2)];
-    // উপত্যকা যথেষ্ট গাঢ় না হলে (≥২২% গাঢ়) — ভাঁজ নেই ধরে নাও
-    if (!(vmin < median * 0.78)) return quad;
 
-    // উপত্যকা সরু হতে হবে (চওড়া ছায়া নয়): ৬০% গভীরতায় প্রস্থ < ২০% ছবি
+    // ---------- কড়া শর্ত ২: যথেষ্ট গাঢ় (≥৩০%, আগে ২২%) ----------
+    if (!(vmin < median * 0.70)) return quad;
+
+    // ---------- কড়া শর্ত ৩: সরু ব্যান্ড (<১২% প্রস্থ, আগে ২০%) ----------
     const thr = median - (median - vmin) * 0.6;
     let L = vx, Rr = vx;
     while (L > 0 && sm[L] < thr) L--;
     while (Rr < RW - 1 && sm[Rr] < thr) Rr++;
-    if ((Rr - L) > RW * 0.2) return quad;
+    const bandW = Rr - L;
+    if (bandW > RW * 0.12 || bandW < 2) return quad;
 
-    // ভাঁজ বরাবর কলামটা আসল ছবিতে ফিরিয়ে আনো (inverse homography)
+    // ---------- কড়া শর্ত ৪: দুই পাশেই উজ্জ্বল পাতা আছে ----------
+    // (ভাঁজ হলে দু'দিকেই কাগজ থাকবে; ছায়া/কালো ধার হলে এক পাশ অন্ধকার)
+    const meanRange = (i0, i1) => {
+      let s = 0, n = 0;
+      for (let i = Math.max(0, i0); i < Math.min(RW, i1); i++) { s += sm[i]; n++; }
+      return n ? s / n : 0;
+    };
+    const leftPage = meanRange(L - Math.floor(RW * 0.18), L - 4);
+    const rightPage = meanRange(Rr + 4, Rr + Math.floor(RW * 0.18));
+    if (!(leftPage > vmin * 1.35 && rightPage > vmin * 1.35)) return quad;
+    // দুই পাশের উজ্জ্বলতা কাছাকাছি হতে হবে (একই বইয়ের দুই পাতা)
+    const lo = Math.min(leftPage, rightPage), hi = Math.max(leftPage, rightPage);
+    if (lo < hi * 0.72) return quad;
+
+    // ---------- কড়া শর্ত ৫: রেখাটা উপর থেকে নিচ পর্যন্ত টানা ----------
+    // প্রতিটি সারি-ব্যান্ডে vx-এর আশেপাশে সত্যিই গাঢ় বিন্দু আছে কিনা
+    const BANDS = 10;
+    const win = Math.max(6, Math.floor(RW * 0.05));
+    let hits = 0;
+    for (let bnd = 0; bnd < BANDS; bnd++) {
+      const ry0 = y0 + Math.floor((rows * bnd) / BANDS);
+      const ry1 = y0 + Math.floor((rows * (bnd + 1)) / BANDS);
+      let bestLocal = Infinity, rowMean = 0, cnt = 0;
+      for (let y = ry0; y < ry1; y++) {
+        for (let x = 0; x < RW; x++) { rowMean += rect.data[y * RW + x]; cnt++; }
+        for (let x = Math.max(0, vx - win); x < Math.min(RW, vx + win); x++) {
+          const v = rect.data[y * RW + x];
+          if (v < bestLocal) bestLocal = v;
+        }
+      }
+      rowMean = cnt ? rowMean / cnt : 255;
+      if (bestLocal < rowMean * 0.72) hits++;
+    }
+    // অন্তত ৮০% ব্যান্ডে রেখা থাকতে হবে (নাহলে এটা লেখা/ছায়া, ভাঁজ নয়)
+    if (hits < BANDS * 0.8) return quad;
+
+    // ---------- কড়া শর্ত ৬: বাদ যাওয়া অংশ যথেষ্ট বড় ----------
+    const t = vx / RW;
+    if (t > 0.42 && t < 0.58) {
+      // ঠিক মাঝখানে — দুই পাতাই সমান; কোনটা রাখব অনিশ্চিত নয়, বড়টা রাখো
+    } else if (Math.min(t, 1 - t) < 0.18) {
+      return quad; // সামান্য এক ফালি — সম্ভবত ছায়া, বাদ দিও না
+    }
+
     Minv = cv.getPerspectiveTransform(dstTri, srcTri);
     const h = Minv.data64F;
     const top = applyH(h, vx, 0);
     const bot = applyH(h, vx, RH);
 
-    // বড় অংশটাই রাখো (ছোট অংশ = পাশের পাতা)
-    const t = vx / RW;
     const refined = quad.map(p => ({ ...p }));
-    if (t < 0.5) { refined[0] = top; refined[3] = bot; }   // বাঁ ধার সরাও (TL, BL)
-    else         { refined[1] = top; refined[2] = bot; }   // ডান ধার সরাও (TR, BR)
+    if (t < 0.5) { refined[0] = top; refined[3] = bot; }
+    else         { refined[1] = top; refined[2] = bot; }
     return refined;
   } catch (e) {
     return quad;
@@ -405,9 +449,133 @@ function warp(imageData, corners) {
     // INTER_CUBIC — সামান্য বেশি ধারালো ফল
     cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_CUBIC,
                        cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+
+    // ক্রপের পরেও লেখা সামান্য বাঁকা থাকলে সোজা করো
+    const straight = deskewMat(cv, dst);
+    if (straight) {
+      const res = { width: straight.cols, height: straight.rows, data: new Uint8ClampedArray(straight.data) };
+      straight.delete();
+      return res;
+    }
     return { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(dst.data) };
   } finally {
     [src, dst, srcTri, dstTri, M].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * ছায়া ও অসম আলো দূর করা (একটি চ্যানেলের জন্য)।
+ *
+ * কৌশল: বড় kernel দিয়ে dilate + median blur করলে লেখা মুছে গিয়ে শুধু
+ * "আলোর মানচিত্র" (background) থেকে যায়। মূল ছবিকে সেই মানচিত্র দিয়ে ভাগ
+ * করলে ছায়া/অসম আলো বাদ যায়, কাগজ সমান সাদা হয়, লেখা অক্ষত থাকে।
+ * গতির জন্য background হিসাব ১/৪ মাপে হয়।
+ */
+function estimateBackground(cv, ch) {
+  const q = 0.25;
+  const qW = Math.max(8, Math.round(ch.cols * q));
+  const qH = Math.max(8, Math.round(ch.rows * q));
+  let small = null, dil = null, med = null, bg = null, kernel = null;
+  try {
+    small = new cv.Mat();
+    cv.resize(ch, small, new cv.Size(qW, qH), 0, 0, cv.INTER_AREA);
+
+    // kernel ছবির মাপের সাথে মানানসই (ছোট ছবিতে ছোট, বড়তে বড়)
+    const k = Math.max(3, (Math.round(Math.max(qW, qH) / 60) * 2 + 1));
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(k, k));
+    dil = new cv.Mat();
+    cv.dilate(small, dil, kernel, new cv.Point(-1, -1), 1,
+              cv.BORDER_REPLICATE, cv.morphologyDefaultBorderValue());
+
+    // medianBlur ksize বিজোড় ও ≤ ৩১ রাখি
+    let mk = Math.max(3, Math.min(31, (Math.round(k / 2) * 2 + 1)));
+    med = new cv.Mat();
+    cv.medianBlur(dil, med, mk);
+
+    bg = new cv.Mat();
+    cv.resize(med, bg, new cv.Size(ch.cols, ch.rows), 0, 0, cv.INTER_LINEAR);
+    return bg;
+  } catch (e) {
+    if (bg) { bg.delete(); }
+    return null;
+  } finally {
+    [small, dil, med, kernel].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * ছবি কতটা ধারালো — Laplacian-এর ভেদাঙ্ক (variance)।
+ * নড়া হাতে তোলা ঝাপসা ছবিতে এই মান অনেক কম হয়।
+ * তুলনাযোগ্য রাখতে হিসাব সবসময় ৬৪০px চওড়া কপিতে হয়।
+ */
+function sharpnessScore(imageData) {
+  const cv = self.cv;
+  let src = null, small = null, gray = null, lap = null;
+  try {
+    src = matFromImageData(imageData);
+    const W = 640;
+    const k = Math.min(1, W / Math.max(1, src.cols));
+    small = new cv.Mat();
+    cv.resize(src, small, new cv.Size(Math.round(src.cols * k), Math.round(src.rows * k)), 0, 0, cv.INTER_AREA);
+    gray = new cv.Mat();
+    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY, 0);
+    lap = new cv.Mat();
+    cv.Laplacian(gray, lap, cv.CV_64F, 3, 1, 0, cv.BORDER_DEFAULT);
+    const mean = new cv.Mat(), std = new cv.Mat();
+    cv.meanStdDev(lap, mean, std);
+    const sd = std.data64F[0];
+    mean.delete(); std.delete();
+    return sd * sd;   // variance
+  } catch (e) {
+    return 9999;      // মাপা না গেলে আটকাব না
+  } finally {
+    [src, small, gray, lap].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * লেখা সোজা করা (deskew) — ক্রপের পরেও লেখা ২-৪° বাঁকা থাকতে পারে।
+ * লেখার লাইনগুলো HoughLinesP দিয়ে খুঁজে, প্রায়-অনুভূমিক লাইনগুলোর কোণের
+ * মধ্যক নিয়ে পুরো ছবি ঘুরিয়ে দেয়। ±৭°-এর বেশি হলে কিছু করে না
+ * (তখন সেটা বাঁকা লেখা নয়, ভুল ডিটেকশন হওয়ার সম্ভাবনাই বেশি)।
+ */
+function deskewMat(cv, srcRgba) {
+  let gray = null, bin = null, edges = null, lines = null, rot = null, out = null;
+  try {
+    gray = new cv.Mat();
+    cv.cvtColor(srcRgba, gray, cv.COLOR_RGBA2GRAY, 0);
+    edges = new cv.Mat();
+    cv.Canny(gray, edges, 50, 150);
+    lines = new cv.Mat();
+    const minLen = Math.max(40, srcRgba.cols * 0.25);
+    cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, minLen, 12);
+
+    const angles = [];
+    for (let i = 0; i < lines.rows; i++) {
+      const x1 = lines.data32S[i*4], y1 = lines.data32S[i*4+1];
+      const x2 = lines.data32S[i*4+2], y2 = lines.data32S[i*4+3];
+      const dx = x2 - x1, dy = y2 - y1;
+      if (Math.abs(dx) < 1) continue;
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+      if (Math.abs(ang) <= 7) angles.push(ang);   // প্রায়-অনুভূমিক লাইনই লেখা
+    }
+    if (angles.length < 6) return null;            // যথেষ্ট প্রমাণ নেই
+
+    angles.sort((a, b) => a - b);
+    const med = angles[Math.floor(angles.length / 2)];
+    if (Math.abs(med) < 0.25 || Math.abs(med) > 7) return null;  // নগণ্য বা সন্দেহজনক
+
+    const center = new cv.Point(srcRgba.cols / 2, srcRgba.rows / 2);
+    rot = cv.getRotationMatrix2D(center, med, 1);
+    out = new cv.Mat();
+    cv.warpAffine(srcRgba, out, rot, new cv.Size(srcRgba.cols, srcRgba.rows),
+                  cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
+    return out;
+  } catch (e) {
+    if (out) { out.delete(); }
+    return null;
+  } finally {
+    [gray, bin, edges, lines, rot].forEach(m => { if (m) m.delete(); });
   }
 }
 
@@ -424,25 +592,18 @@ function magicColor(imageData) {
 
     merged = new cv.MatVector();
     const tmp = [];
-    // ব্যাকগ্রাউন্ড হিসাব ১/৪ সাইজে (≈১৬x দ্রুত), blur ছবির মাপের অনুপাতে —
-    // ফলে বড় ছবিতেও আলোর প্যাটার্ন ঠিক ধরা পড়ে, লেখা ফিকে হয় না
-    const q = 0.25;
-    const qW = Math.max(1, Math.round(rgb.cols * q));
-    const qH = Math.max(1, Math.round(rgb.rows * q));
-    const sigmaQ = Math.max(8, Math.round(Math.max(qW, qH) / 40));
     for (let i = 0; i < 3; i++) {
       const ch = channels.get(i);
-      const chSmall = new cv.Mat();
-      cv.resize(ch, chSmall, new cv.Size(qW, qH), 0, 0, cv.INTER_AREA);
-      const blurSmall = new cv.Mat();
-      cv.GaussianBlur(chSmall, blurSmall, new cv.Size(0, 0), sigmaQ, sigmaQ, cv.BORDER_DEFAULT);
-      const blur = new cv.Mat();
-      cv.resize(blurSmall, blur, new cv.Size(rgb.cols, rgb.rows), 0, 0, cv.INTER_LINEAR);
+      const bgc = estimateBackground(cv, ch);      // ছায়া/আলোর মানচিত্র
       const norm = new cv.Mat();
-      // ch/blur * 235 → ব্যাকগ্রাউন্ড ≈ সাদা (235), রং সংরক্ষিত
-      cv.divide(ch, blur, norm, 235);
+      if (bgc) {
+        cv.divide(ch, bgc, norm, 235);             // ভাগ → সমান সাদা কাগজ
+        tmp.push(bgc);
+      } else {
+        ch.copyTo(norm);
+      }
       merged.push_back(norm);
-      tmp.push(ch, chSmall, blurSmall, blur, norm);
+      tmp.push(ch, norm);
     }
 
     out = new cv.Mat();
@@ -470,6 +631,11 @@ function applyFilter(imageData, filter) {
     src = matFromImageData(imageData);
     dst = new cv.Mat();
     cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
+
+    // ছায়া/অসম আলো দূর — grayscale ও scan দুটোতেই
+    const bgg = estimateBackground(cv, dst);
+    if (bgg) { cv.divide(dst, bgg, dst, 235); bgg.delete(); }
+
     if (filter === 'scan') {
       cv.GaussianBlur(dst, dst, new cv.Size(5,5), 0, 0, cv.BORDER_DEFAULT);
       cv.adaptiveThreshold(dst, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 10);
@@ -497,6 +663,7 @@ self.onmessage = async (e) => {
     if (type === 'detect')      result = detectEdges(payload.imageData);
     else if (type === 'warp')   result = warp(payload.imageData, payload.corners);
     else if (type === 'filter') result = applyFilter(payload.imageData, payload.filter);
+    else if (type === 'sharpness') result = sharpnessScore(payload.imageData);
     else throw new Error('Unknown message type: ' + type);
 
     // ImageData-জাতীয় ফল হলে buffer transfer করো (দ্রুত, কপি ছাড়া)
