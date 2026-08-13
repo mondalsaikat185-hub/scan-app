@@ -29,49 +29,149 @@ function matFromImageData(imageData) {
   return m;
 }
 
-// বইয়ের ভাঁজ: quad-এর ভেতরে লম্বা প্রায়-উল্লম্ব রেখা খুঁজে ধার সরাও
-function refineGutter(cv, edgesMat, quad) {
-  let lines = null;
+// ---------- হোমোগ্রাফি হেল্পার ----------
+// 3x3 ম্যাট্রিক্স (Minv.data64F) দিয়ে একটা বিন্দু ম্যাপ করা
+function applyH(h, x, y) {
+  const w = h[6] * x + h[7] * y + h[8];
+  return { x: (h[0] * x + h[1] * y + h[2]) / w, y: (h[3] * x + h[4] * y + h[5]) / w };
+}
+
+/**
+ * বইয়ের ভাঁজ (gutter) ডিটেকশন — v2
+ * পুরোনো পদ্ধতি (গোটা ছবিতে HoughLinesP) বাস্তব ছবিতে ভুল রেখা ধরত।
+ * নতুন পদ্ধতি: quad-টাকে আগে সমান আয়তক্ষেত্রে (rectify) এনে, প্রতিটা কলামের
+ * গড় উজ্জ্বলতার প্রোফাইল বানিয়ে "গাঢ় উপত্যকা" খোঁজা হয় — বইয়ের ভাঁজ সবসময়
+ * পাতার চেয়ে গাঢ় একটা লম্বা ব্যান্ড, তাই এটা অনেক নির্ভরযোগ্য।
+ * নিশ্চিত না হলে quad অপরিবর্তিত থাকে (ভুল ক্রপের চেয়ে না-করা ভালো)।
+ */
+function refineGutter(cv, graySmall, quad) {
+  const RW = 480, RH = 640;
+  let srcTri = null, dstTri = null, M = null, Minv = null, rect = null;
   try {
-    const qH = Math.max(
-      Math.hypot(quad[3].x - quad[0].x, quad[3].y - quad[0].y),
-      Math.hypot(quad[2].x - quad[1].x, quad[2].y - quad[1].y)
-    );
-    const qW = Math.max(
-      Math.hypot(quad[1].x - quad[0].x, quad[1].y - quad[0].y),
-      Math.hypot(quad[2].x - quad[3].x, quad[2].y - quad[3].y)
-    );
-    lines = new cv.Mat();
-    // লম্বা রেখাই চাই: minLineLength = quad উচ্চতার ৬৫%
-    cv.HoughLinesP(edgesMat, lines, 1, Math.PI / 180, 60, qH * 0.65, qH * 0.08);
+    const [tl, tr, br, bl] = quad;
+    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, RW, 0, RW, RH, 0, RH]);
+    M = cv.getPerspectiveTransform(srcTri, dstTri);
+    rect = new cv.Mat();
+    cv.warpPerspective(graySmall, rect, M, new cv.Size(RW, RH), cv.INTER_LINEAR,
+                       cv.BORDER_REPLICATE, new cv.Scalar());
 
-    const minX = Math.min(...quad.map(p => p.x)), maxX = Math.max(...quad.map(p => p.x));
-    let best = null; // {x, len}
-    for (let i = 0; i < lines.rows; i++) {
-      const x1 = lines.data32S[i*4], y1 = lines.data32S[i*4+1];
-      const x2 = lines.data32S[i*4+2], y2 = lines.data32S[i*4+3];
-      const dx = x2 - x1, dy = y2 - y1;
-      const len = Math.hypot(dx, dy);
-      // প্রায়-উল্লম্ব? (উল্লম্ব থেকে ±12°)
-      if (Math.abs(dx) > Math.abs(dy) * 0.21) continue;
-      const midX = (x1 + x2) / 2;
-      const t = (midX - minX) / (maxX - minX); // quad-প্রস্থে অবস্থান 0..1
-      // quad-এর ভেতরের দিকে (ধার থেকে দূরে) — ১৫%..৮৫%
-      if (t < 0.15 || t > 0.85) continue;
-      if (!best || len > best.len) best = { x: midX, t, len };
+    // কলামভিত্তিক গড় উজ্জ্বলতা (মাঝের ৮০% সারি — উপর/নিচের ছায়া বাদ)
+    const y0 = Math.floor(RH * 0.1), y1 = Math.floor(RH * 0.9);
+    const rows = y1 - y0;
+    const prof = new Float64Array(RW);
+    for (let x = 0; x < RW; x++) {
+      let sum = 0;
+      for (let y = y0; y < y1; y++) sum += rect.data[y * RW + x];
+      prof[x] = sum / rows;
     }
-    if (!best) return quad;
+    // মসৃণ করা (±4 কলাম)
+    const sm = new Float64Array(RW);
+    const R = 4;
+    for (let x = 0; x < RW; x++) {
+      let s = 0, n = 0;
+      for (let k = -R; k <= R; k++) {
+        const i = x + k;
+        if (i >= 0 && i < RW) { s += prof[i]; n++; }
+      }
+      sm[x] = s / n;
+    }
 
-    // কোন ধার সরবে? রেখা যেদিকে কাছে সেদিকের ধার
-    const moveLeft = best.t < 0.5;
+    // মাঝের ২৫%–৭৫% এলাকায় সবচেয়ে গাঢ় কলাম
+    const a = Math.floor(RW * 0.25), b = Math.floor(RW * 0.75);
+    let vx = -1, vmin = Infinity;
+    for (let x = a; x < b; x++) if (sm[x] < vmin) { vmin = sm[x]; vx = x; }
+    if (vx < 0) return quad;
+
+    // পাতার সাধারণ উজ্জ্বলতা = প্রোফাইলের মধ্যক
+    const sorted = Array.from(sm).sort((p, q) => p - q);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    // উপত্যকা যথেষ্ট গাঢ় না হলে (≥২২% গাঢ়) — ভাঁজ নেই ধরে নাও
+    if (!(vmin < median * 0.78)) return quad;
+
+    // উপত্যকা সরু হতে হবে (চওড়া ছায়া নয়): ৬০% গভীরতায় প্রস্থ < ২০% ছবি
+    const thr = median - (median - vmin) * 0.6;
+    let L = vx, Rr = vx;
+    while (L > 0 && sm[L] < thr) L--;
+    while (Rr < RW - 1 && sm[Rr] < thr) Rr++;
+    if ((Rr - L) > RW * 0.2) return quad;
+
+    // ভাঁজ বরাবর কলামটা আসল ছবিতে ফিরিয়ে আনো (inverse homography)
+    Minv = cv.getPerspectiveTransform(dstTri, srcTri);
+    const h = Minv.data64F;
+    const top = applyH(h, vx, 0);
+    const bot = applyH(h, vx, RH);
+
+    // বড় অংশটাই রাখো (ছোট অংশ = পাশের পাতা)
+    const t = vx / RW;
     const refined = quad.map(p => ({ ...p }));
-    if (moveLeft) { refined[0].x = best.x; refined[3].x = best.x; }  // TL, BL
-    else          { refined[1].x = best.x; refined[2].x = best.x; }  // TR, BR
+    if (t < 0.5) { refined[0] = top; refined[3] = bot; }   // বাঁ ধার সরাও (TL, BL)
+    else         { refined[1] = top; refined[2] = bot; }   // ডান ধার সরাও (TR, BR)
     return refined;
   } catch (e) {
-    return quad; // কোনো সমস্যায় আগেরটাই
+    return quad;
   } finally {
-    if (lines) lines.delete();
+    [srcTri, dstTri, M, Minv, rect].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+/**
+ * ছবিতে ট্যারা দেখানো আয়তক্ষেত্রের আসল প্রস্থ:উচ্চতা অনুপাত বের করা।
+ * (Zhang & He-এর whiteboard-scanning অ্যালগরিদম)
+ *
+ * কেন দরকার: ক্যামেরা হেলিয়ে ছবি তুললে কাগজের উপরটা সরু, নিচটা চওড়া দেখায়।
+ * শুধু কোণার দূরত্ব মেপে আউটপুট সাইজ ঠিক করলে পাতা চাপা/টানা লাগে।
+ * এই হিসাব পরিপ্রেক্ষিত (perspective) থেকে আসল অনুপাত ফিরিয়ে আনে।
+ */
+function rectAspectRatio(quad, imgW, imgH) {
+  try {
+    const u0 = imgW / 2, v0 = imgH / 2;
+    // m1=TL, m2=TR, m3=BL, m4=BR
+    const m1 = [quad[0].x, quad[0].y, 1];
+    const m2 = [quad[1].x, quad[1].y, 1];
+    const m3 = [quad[3].x, quad[3].y, 1];
+    const m4 = [quad[2].x, quad[2].y, 1];
+
+    const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    const dot = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+
+    const k2 = dot(cross(m1, m4), m3) / dot(cross(m2, m4), m3);
+    const k3 = dot(cross(m1, m4), m2) / dot(cross(m3, m4), m2);
+    if (!isFinite(k2) || !isFinite(k3)) return null;
+
+    const n2 = [k2*m2[0]-m1[0], k2*m2[1]-m1[1], k2*m2[2]-m1[2]];
+    const n3 = [k3*m3[0]-m1[0], k3*m3[1]-m1[1], k3*m3[2]-m1[2]];
+
+    // প্রায় সমান্তরাল ধার → focal নির্ণয় অসম্ভব। সরল (affine) অনুপাত দিই,
+    // কিন্তু conf:false — warp() তখন A4-এর দিকে বেশি ঝুঁকবে।
+    if (Math.abs(n2[2]) < 1e-9 || Math.abs(n3[2]) < 1e-9) {
+      const r = Math.sqrt((n2[0]*n2[0] + n2[1]*n2[1]) / (n3[0]*n3[0] + n3[1]*n3[1]));
+      return (isFinite(r) && r > 0) ? { r, conf: false } : null;
+    }
+
+    const f2 = -(1 / (n2[2]*n3[2])) * (
+      (n2[0]*n3[0] - (n2[0]*n3[2] + n2[2]*n3[0])*u0 + n2[2]*n3[2]*u0*u0) +
+      (n2[1]*n3[1] - (n2[1]*n3[2] + n2[2]*n3[1])*v0 + n2[2]*n3[2]*v0*v0)
+    );
+    if (!(f2 > 0)) {
+      const r = Math.sqrt((n2[0]*n2[0] + n2[1]*n2[1]) / (n3[0]*n3[0] + n3[1]*n3[1]));
+      return (isFinite(r) && r > 0) ? { r, conf: false } : null;
+    }
+    const f = Math.sqrt(f2);
+
+    // AtiAi = (A^T A)^-1 ; A = [[f,0,u0],[0,f,v0],[0,0,1]]
+    const q = (n, m) =>
+      (n[0]*m[0] + n[1]*m[1]) / (f*f) +
+      (-(u0/(f*f)))*(n[0]*m[2] + n[2]*m[0]) +
+      (-(v0/(f*f)))*(n[1]*m[2] + n[2]*m[1]) +
+      ((u0*u0 + v0*v0)/(f*f) + 1) * n[2]*m[2];
+
+    const num = q(n2, n2), den = q(n3, n3);
+    if (!(num > 0) || !(den > 0)) return null;
+    const ratio = Math.sqrt(num / den);
+    return (isFinite(ratio) && ratio > 0) ? { r: ratio, conf: true } : null;
+  } catch (e) {
+    return null;
   }
 }
 
@@ -198,7 +298,7 @@ function detectEdges(imageData) {
       candidates.sort((a, b) => b.score - a.score);
       let bestQuadSmall = orderPoints(candidates[0].pts);
       // Gutter refinement using edges from method 1
-      bestQuadSmall = refineGutter(cv, edges, bestQuadSmall);
+      bestQuadSmall = refineGutter(cv, gray, bestQuadSmall);
 
       const bestPts = bestQuadSmall.map(p => ({
         x: Math.max(0, Math.min(W, p.x / scale)),
@@ -223,19 +323,55 @@ function warp(imageData, corners) {
   try {
     src = matFromImageData(imageData);
     const [tl, tr, br, bl] = corners;
-    // কমপক্ষে 1px — degenerate কোণায় 0-size warp WASM ক্র্যাশ করাতে পারে
-    const maxW = Math.max(1, Math.max(Math.hypot(br.x-bl.x, br.y-bl.y), Math.hypot(tr.x-tl.x, tr.y-tl.y)) | 0);
-    const maxH = Math.max(1, Math.max(Math.hypot(tr.x-br.x, tr.y-br.y), Math.hypot(tl.x-bl.x, tl.y-bl.y)) | 0);
-    srcTri = cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]);
-    dstTri = cv.matFromArray(4,1,cv.CV_32FC2,[0,0,maxW,0,maxW,maxH,0,maxH]);
+
+    // ধারগুলোর মাপা দৈর্ঘ্য (পরিপ্রেক্ষিতের কারণে এগুলো "দেখা" মাপ, আসল নয়)
+    const wTop = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+    const wBot = Math.hypot(br.x - bl.x, br.y - bl.y);
+    const hLeft = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+    const hRight = Math.hypot(br.x - tr.x, br.y - tr.y);
+    const measW = Math.max(wTop, wBot);
+    const measH = Math.max(hLeft, hRight);
+
+    // আসল প্রস্থ:উচ্চতা অনুপাত (পরিপ্রেক্ষিত সংশোধন করে)
+    const est = rectAspectRatio(corners, imageData.width, imageData.height);
+    const measRatio = measW / Math.max(1, measH);
+    let ratio, confident;
+    if (est && isFinite(est.r) && est.r > 0.2 && est.r < 5 &&
+        est.r / measRatio <= 2.2 && measRatio / est.r <= 2.2) {
+      ratio = est.r; confident = est.conf;
+    } else {
+      ratio = measRatio; confident = false;
+    }
+
+    // A4 (1:√2) কাছাকাছি হলে ঠিক A4 অনুপাতে বসাও — প্রিন্টে নিখুঁত হবে
+    const A4_P = 1 / Math.SQRT2;   // ০.৭০৭ (portrait)
+    const A4_L = Math.SQRT2;       // ১.৪১৪ (landscape)
+    // A4-এর কাছাকাছি হলে ঠিক A4 অনুপাতে বসাও — প্রিন্টে নিখুঁত হবে।
+    // অনুমান আত্মবিশ্বাসী হলে কড়া সীমা (২২%), না হলে শিথিল (৩২%) —
+    // কারণ তখন A4 হওয়ার সম্ভাবনাই বেশি। রসিদ/কার্ড এই সীমার বাইরে থাকে।
+    const tol = confident ? 0.22 : 0.32;
+    for (const target of [A4_P, A4_L]) {
+      if (Math.abs(ratio - target) / target < tol) { ratio = target; break; }
+    }
+
+    // আউটপুট সাইজ — সবচেয়ে লম্বা দিকটা মূল মাপ ধরে রাখে (রেজোলিউশন হারায় না)
+    const longSide = Math.max(measW, measH);
+    let outW, outH;
+    if (ratio >= 1) { outW = Math.round(longSide); outH = Math.round(longSide / ratio); }
+    else            { outH = Math.round(longSide); outW = Math.round(longSide * ratio); }
+    outW = Math.max(1, Math.min(4000, outW));
+    outH = Math.max(1, Math.min(4000, outH));
+
+    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
     M = cv.getPerspectiveTransform(srcTri, dstTri);
     dst = new cv.Mat();
-    cv.warpPerspective(src, dst, M, new cv.Size(maxW, maxH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    // src RGBA (CV_8UC4), তাই dst-ও RGBA — সরাসরি data নেওয়া যায়
-    // (আগের cv.COLOR_RGBA2RGBA constant-টির অস্তিত্বই নেই — সেটিই warp fail-এর কারণ ছিল)
+    // INTER_CUBIC — সামান্য বেশি ধারালো ফল
+    cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_CUBIC,
+                       cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
     return { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(dst.data) };
   } finally {
-    [src,dst,srcTri,dstTri,M].forEach(m => { if (m) m.delete(); });
+    [src, dst, srcTri, dstTri, M].forEach(m => { if (m) m.delete(); });
   }
 }
 
