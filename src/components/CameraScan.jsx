@@ -2,11 +2,11 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { detectEdges, sharpnessOf } from '../lib/cvClient';
 import './CameraScan.css';
 
-const DETECT_W = 640;        // ডিটেকশন ফ্রেমের প্রস্থ (বেশি = নির্ভুল, কম = দ্রুত)
-const STABLE_FRAMES = 7;     // পরপর কত ফ্রেম স্থির হলে অটো-ক্যাপচার
-const STABLE_TOL = 0.028;    // নড়াচড়ার সীমা (quad-এর নিজের মাপের অনুপাতে)
+const DETECT_W = 560;        // ডিটেকশন ফ্রেমের প্রস্থ (বেশি = নির্ভুল, কম = দ্রুত)
+const STABLE_FRAMES = 4;     // পরপর কত ফ্রেম স্থির হলে অটো-ক্যাপচার
+const STABLE_TOL = 0.035;    // নড়াচড়ার সীমা (quad-এর নিজের মাপের অনুপাতে)
 const SMOOTH = 0.5;          // EMA — ওভারলের কাঁপুনি কমায়
-const HISTORY = 5;           // কত ফ্রেমের মধ্যক (median) নেওয়া হবে
+const HISTORY = 3;           // কত ফ্রেমের মধ্যক (median) নেওয়া হবে
 const OUTLIER_TOL = 0.14;    // মধ্যক থেকে এত দূরের ফ্রেম "বিক্ষিপ্ত" ধরে বাদ
 const MIN_SHARPNESS = 55;    // এর নিচে হলে ছবি ঝাপসা — অটো-ক্যাপচার আটকাবে
 
@@ -168,7 +168,7 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       if (!runningRef.current) break;
       const smooth = trackStability(quad);
       drawOverlay(smooth);
-      await sleep(100);
+      await sleep(55);
     }
   }, []);
 
@@ -248,7 +248,7 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       if (capturingRef.current) return;
       if (score < MIN_SHARPNESS) {
         blurCountRef.current++;
-        stableCountRef.current = Math.max(0, STABLE_FRAMES - 3);
+        stableCountRef.current = Math.max(0, STABLE_FRAMES - 2);
         setHint('একটু ঝাপসা — স্থির ধরুন');
         return;
       }

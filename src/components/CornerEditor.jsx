@@ -8,6 +8,8 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
   const canvasRef = useRef(null);
   const [corners, setCorners] = useState(initialCorners);
   const [draggingIdx, setDraggingIdx] = useState(-1);
+  const [draggingEdge, setDraggingEdge] = useState(-1);   // পুরো একটা ধার টানা হচ্ছে?
+  const dragStartRef = useRef(null);
   const [scale, setScale] = useState(1);
 
   // Initialize canvas and calculate scale to fit screen
@@ -63,6 +65,17 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
     ctx.strokeStyle = '#4ade80'; // green border
     ctx.stroke();
 
+    // ধার টানা হলে সেটাকে মোটা করে দেখাও
+    if (draggingEdge !== -1) {
+      const a = corners[draggingEdge], b = corners[(draggingEdge + 1) % 4];
+      ctx.beginPath();
+      ctx.moveTo(a.x * scale, a.y * scale);
+      ctx.lineTo(b.x * scale, b.y * scale);
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
+
     // Draw handles
     corners.forEach((pt, i) => {
       ctx.beginPath();
@@ -106,7 +119,7 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
       ctx.arc(lx + LOUPE/2, ly + LOUPE/2, LOUPE/2, 0, 2*Math.PI);
       ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.stroke();
     }
-  }, [corners, scale, draggingIdx, imageCanvas]);
+  }, [corners, scale, draggingIdx, draggingEdge, imageCanvas]);
 
   // Input Handling (Mouse & Touch)
   // গুরুত্বপূর্ণ: CSS canvas-কে ছোট করে দেখাতে পারে (max-width:100%),
@@ -144,6 +157,26 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
 
     if (closestIdx !== -1) {
       setDraggingIdx(closestIdx);
+      return;
+    }
+
+    // কোণা না পেলে — কোনো ধারের কাছাকাছি কিনা দেখি।
+    // ধার ধরে টানলে পুরো লাইনটা সমান্তরালভাবে সরে, দুই কোণা আলাদা করে
+    // টানার দরকার হয় না (গ্যালারির ছবিতে এটা অনেক দ্রুত)।
+    let bestEdge = -1, bestDist = Infinity;
+    for (let i = 0; i < 4; i++) {
+      const a = corners[i], b = corners[(i + 1) % 4];
+      const vx = b.x - a.x, vy = b.y - a.y;
+      const len2 = vx * vx + vy * vy || 1;
+      let t = ((pos.x - a.x) * vx + (pos.y - a.y) * vy) / len2;
+      if (t < 0.12 || t > 0.88) continue;          // কোণার খুব কাছে নয়
+      const px = a.x + vx * t, py = a.y + vy * t;
+      const dist = Math.hypot(pos.x - px, pos.y - py);
+      if (dist < hitRadius && dist < bestDist) { bestDist = dist; bestEdge = i; }
+    }
+    if (bestEdge !== -1) {
+      setDraggingEdge(bestEdge);
+      dragStartRef.current = { pos, a: { ...corners[bestEdge] }, b: { ...corners[(bestEdge + 1) % 4] } };
     }
   };
 
@@ -157,27 +190,46 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete }
   };
 
   const handlePointerMove = (e) => {
-    if (draggingIdx === -1) return;
+    if (draggingIdx === -1 && draggingEdge === -1) return;
     e.preventDefault();
     const pos = getMousePos(e);
-    
-    // Constrain to image bounds
-    pos.x = Math.max(0, Math.min(pos.x, imageCanvas.width));
-    pos.y = Math.max(0, Math.min(pos.y, imageCanvas.height));
+    const clampX = (v) => Math.max(0, Math.min(v, imageCanvas.width));
+    const clampY = (v) => Math.max(0, Math.min(v, imageCanvas.height));
 
+    // ---- পুরো ধার সরানো ----
+    if (draggingEdge !== -1 && dragStartRef.current) {
+      const st = dragStartRef.current;
+      const i0 = draggingEdge, i1 = (draggingEdge + 1) % 4;
+      // ধারের লম্ব দিকেই কেবল সরাও — লাইনটা সমান্তরাল থাকে
+      const ex = st.b.x - st.a.x, ey = st.b.y - st.a.y;
+      const el = Math.hypot(ex, ey) || 1;
+      const nx = -ey / el, ny = ex / el;
+      const dx = pos.x - st.pos.x, dy = pos.y - st.pos.y;
+      const amt = dx * nx + dy * ny;
+
+      const next = [...corners];
+      next[i0] = { x: clampX(st.a.x + nx * amt), y: clampY(st.a.y + ny * amt) };
+      next[i1] = { x: clampX(st.b.x + nx * amt), y: clampY(st.b.y + ny * amt) };
+      setCorners(next);
+      return;
+    }
+
+    // ---- একটা কোণা সরানো ----
     const newCorners = [...corners];
-    newCorners[draggingIdx] = pos;
+    newCorners[draggingIdx] = { x: clampX(pos.x), y: clampY(pos.y) };
     setCorners(newCorners);
   };
 
   const handlePointerUp = () => {
     setDraggingIdx(-1);
+    setDraggingEdge(-1);
+    dragStartRef.current = null;
   };
 
   return (
     <div className="corner-editor-container" ref={containerRef}>
       <h2 className="editor-title">Adjust Corners</h2>
-      <p className="editor-subtitle">Drag the points to match the document boundaries</p>
+      <p className="editor-subtitle">কোণা টানুন, অথবা যেকোনো <b>ধার ধরে</b> টেনে পুরো লাইন সরান</p>
       
       <div className="canvas-wrapper">
         <canvas

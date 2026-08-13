@@ -3,6 +3,7 @@ import { initCV, detectEdges, warpCanvas } from './lib/cvClient';
 import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
+import { savePdfBlob, canPickLocation } from './lib/saveFile';
 
 import Loader from './components/Loader';
 import ImageInput from './components/ImageInput';
@@ -93,19 +94,25 @@ function App() {
 
   const handleExportPdf = async (pages, name, q) => {
     if (!pages || pages.length === 0) return;
+    // সেভের আগে নাম জিজ্ঞেস করি — ইউজার চাইলে বদলাতে পারে
+    const suggested = name || 'document';
+    const chosen = window.prompt('ফাইলের নাম দিন:', suggested);
+    if (chosen === null) return;               // বাতিল
+    const finalName = chosen.trim() || suggested;
+
+    setBusy(true);
     try {
       const blob = await makePdfFromPages(pages, q || quality);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${name || 'document'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const res = await savePdfBlob(blob, finalName);
+      if (res === 'downloaded' && !canPickLocation()) {
+        // ফোনে ফোল্ডার-পিকার নেই — ইউজারকে জানিয়ে রাখি
+        console.log('Saved to browser downloads folder');
+      }
     } catch (err) {
       console.error("Export error", err);
-      alert("Failed to export PDF.");
+      alert("PDF সেভ করা গেল না।");
+    } finally {
+      setBusy(false);
     }
   };
 

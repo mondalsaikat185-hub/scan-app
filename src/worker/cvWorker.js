@@ -759,33 +759,84 @@ function sharpnessScore(imageData) {
  * (তখন সেটা বাঁকা লেখা নয়, ভুল ডিটেকশন হওয়ার সম্ভাবনাই বেশি)।
  */
 function deskewMat(cv, srcRgba) {
-  let gray = null, bin = null, edges = null, lines = null, rot = null, out = null;
+  let gray = null, small = null, bin = null, rot = null, out = null, test = null;
   try {
+    // ---- ছোট, দ্বিমুখী (binary) কপি তৈরি ----
     gray = new cv.Mat();
     cv.cvtColor(srcRgba, gray, cv.COLOR_RGBA2GRAY, 0);
-    edges = new cv.Mat();
-    cv.Canny(gray, edges, 50, 150);
-    lines = new cv.Mat();
-    const minLen = Math.max(40, srcRgba.cols * 0.25);
-    cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, minLen, 12);
+    const TW = 600;
+    const k = Math.min(1, TW / Math.max(1, gray.cols));
+    small = new cv.Mat();
+    cv.resize(gray, small, new cv.Size(Math.max(8, Math.round(gray.cols * k)),
+                                      Math.max(8, Math.round(gray.rows * k))), 0, 0, cv.INTER_AREA);
+    bin = new cv.Mat();
+    // লেখা = সাদা (255), কাগজ = কালো — তাই THRESH_BINARY_INV
+    cv.threshold(small, bin, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
 
-    const angles = [];
-    for (let i = 0; i < lines.rows; i++) {
-      const x1 = lines.data32S[i*4], y1 = lines.data32S[i*4+1];
-      const x2 = lines.data32S[i*4+2], y2 = lines.data32S[i*4+3];
-      const dx = x2 - x1, dy = y2 - y1;
-      if (Math.abs(dx) < 1) continue;
-      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
-      if (Math.abs(ang) <= 7) angles.push(ang);   // প্রায়-অনুভূমিক লাইনই লেখা
+    const bw = bin.cols, bh = bin.rows;
+    const center = new cv.Point(bw / 2, bh / 2);
+    test = new cv.Mat();
+
+    /**
+     * একটা কোণে ঘুরিয়ে "সারি-প্রোফাইলের ভেদাঙ্ক" মাপি।
+     *
+     * লেখা যখন ঠিক অনুভূমিক, তখন প্রতিটি লেখার লাইন একটি সারিতে জড়ো হয় —
+     * ফলে কোনো সারিতে অনেক কালো বিন্দু, কোনো সারিতে প্রায় কিছুই না; অর্থাৎ
+     * ভেদাঙ্ক সর্বোচ্চ। বাঁকা থাকলে বিন্দুগুলো ছড়িয়ে যায়, ভেদাঙ্ক কমে।
+     *
+     * এই "মেপে দেখা" পদ্ধতির সবচেয়ে বড় সুবিধা: কোন দিকে ঘোরাতে হবে তা
+     * অনুমান করতে হয় না — দুই দিকেই পরীক্ষা করে যেটা ভালো সেটাই নেওয়া হয়।
+     * (আগের সংস্করণে চিহ্ন উল্টে যাওয়ায় লেখা উল্টো দিকে হেলে যাচ্ছিল।)
+     */
+    const scoreAt = (angle) => {
+      let M = null;
+      try {
+        if (angle === 0) {
+          bin.copyTo(test);
+        } else {
+          M = cv.getRotationMatrix2D(center, angle, 1);
+          cv.warpAffine(bin, test, M, new cv.Size(bw, bh), cv.INTER_NEAREST,
+                        cv.BORDER_CONSTANT, new cv.Scalar(0, 0, 0, 0));
+        }
+        // সারি-প্রতি কালো বিন্দুর সংখ্যা
+        const rows = new Float64Array(bh);
+        let sum = 0;
+        for (let y = 0; y < bh; y++) {
+          let c = 0;
+          const off = y * bw;
+          for (let x = 0; x < bw; x++) if (test.data[off + x]) c++;
+          rows[y] = c; sum += c;
+        }
+        if (sum < bh) return -1;                  // লেখা প্রায় নেই
+        const mean = sum / bh;
+        let varSum = 0;
+        for (let y = 0; y < bh; y++) { const d = rows[y] - mean; varSum += d * d; }
+        return varSum / bh;
+      } catch (e) {
+        return -1;
+      } finally { if (M) M.delete(); }
+    };
+
+    // ---- মোটা দাগে খোঁজা (±৮°, ১° ধাপে) ----
+    let bestA = 0, bestS = scoreAt(0);
+    const base = bestS;
+    for (let a = -8; a <= 8; a += 1) {
+      if (a === 0) continue;
+      const sc = scoreAt(a);
+      if (sc > bestS) { bestS = sc; bestA = a; }
     }
-    if (angles.length < 6) return null;            // যথেষ্ট প্রমাণ নেই
+    // ---- সূক্ষ্ম খোঁজা (সেরা কোণের ±১°, ০.২৫° ধাপে) ----
+    for (let a = bestA - 1; a <= bestA + 1; a += 0.25) {
+      const sc = scoreAt(a);
+      if (sc > bestS) { bestS = sc; bestA = a; }
+    }
 
-    angles.sort((a, b) => a - b);
-    const med = angles[Math.floor(angles.length / 2)];
-    if (Math.abs(med) < 0.25 || Math.abs(med) > 7) return null;  // নগণ্য বা সন্দেহজনক
+    // ---- যথেষ্ট উন্নতি না হলে হাত দিও না ----
+    // (৮% এর কম উন্নতি = সন্দেহজনক; অকারণে ঘুরিয়ে ক্ষতি করার দরকার নেই)
+    if (Math.abs(bestA) < 0.25 || base <= 0 || bestS < base * 1.08) return null;
 
-    const center = new cv.Point(srcRgba.cols / 2, srcRgba.rows / 2);
-    rot = cv.getRotationMatrix2D(center, med, 1);
+    const fullCenter = new cv.Point(srcRgba.cols / 2, srcRgba.rows / 2);
+    rot = cv.getRotationMatrix2D(fullCenter, bestA, 1);
     out = new cv.Mat();
     cv.warpAffine(srcRgba, out, rot, new cv.Size(srcRgba.cols, srcRgba.rows),
                   cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
@@ -794,7 +845,7 @@ function deskewMat(cv, srcRgba) {
     if (out) { out.delete(); }
     return null;
   } finally {
-    [gray, bin, edges, lines, rot].forEach(m => { if (m) m.delete(); });
+    [gray, small, bin, rot, test].forEach(m => { if (m) m.delete(); });
   }
 }
 
