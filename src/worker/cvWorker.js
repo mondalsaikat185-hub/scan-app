@@ -1109,6 +1109,109 @@ function autoTrimBorders(cv, srcRgba) {
   }
 }
 
+/**
+ * Sauvola স্থানীয় বাইনারাইজেশন — ডকুমেন্ট স্ক্যানিংয়ের শিল্পমান।
+ *
+ * সাধারণ adaptiveThreshold শুধু চারপাশের *গড়* দেখে সিদ্ধান্ত নেয়। ফলে
+ * ফাঁকা সাদা জায়গায় সামান্য দানা থাকলেও সেটাকে "লেখা" ভেবে কালো ছোপ ফেলে,
+ * আবার ফ্যাকাশে লেখা মুছে দেয়।
+ *
+ * Sauvola গড়ের সাথে *বিচ্যুতিও* (standard deviation) মাপে:
+ *      T = m · (1 + k · (s / R − 1))
+ * যেখানে m = স্থানীয় গড়, s = স্থানীয় বিচ্যুতি, R = 128, k ≈ 0.2
+ *
+ * অর্থ: যেখানে আশপাশ সমসত্ত্ব (ফাঁকা কাগজ) সেখানে s ছোট → threshold নেমে
+ * যায় → দানা কালো হয় না। আর যেখানে সত্যিকারের লেখা আছে সেখানে s বড় →
+ * ফ্যাকাশে লেখাও ধরা পড়ে। এটাই "পরিষ্কার সাদা + কুচকুচে কালো" চেহারার রহস্য।
+ *
+ * গতি: integral image (summed-area table) দিয়ে যেকোনো জানালার গড় ও বর্গগড়
+ * ধ্রুব সময়ে পাওয়া যায়, তাই বড় ছবিতেও দ্রুত চলে।
+ */
+function sauvolaBinarize(cv, grayMat, kParam, windowFrac) {
+  const W = grayMat.cols, H = grayMat.rows;
+  const N = W * H;
+  const src = grayMat.data;
+
+  // ---- integral images (Float64 — যোগফল বড় হয়) ----
+  const w1 = W + 1;
+  const sum = new Float64Array((W + 1) * (H + 1));
+  const sqs = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) {
+    let rowSum = 0, rowSq = 0;
+    for (let x = 0; x < W; x++) {
+      const v = src[y * W + x];
+      rowSum += v; rowSq += v * v;
+      sum[(y + 1) * w1 + (x + 1)] = sum[y * w1 + (x + 1)] + rowSum;
+      sqs[(y + 1) * w1 + (x + 1)] = sqs[y * w1 + (x + 1)] + rowSq;
+    }
+  }
+
+  // জানালার অর্ধ-আকার — ছবির মাপের অনুপাতে (লেখার আকারের সাথে মানানসই)
+  const r = Math.max(7, Math.round(Math.min(W, H) * (windowFrac || 0.025)));
+  const k = (kParam === undefined ? 0.2 : kParam);
+  const R = 128;
+
+  const out = new cv.Mat(H, W, cv.CV_8UC1);
+  const dst = out.data;
+
+  for (let y = 0; y < H; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(H - 1, y + r);
+    for (let x = 0; x < W; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(W - 1, x + r);
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+
+      const A = y0 * w1 + x0, B = y0 * w1 + (x1 + 1);
+      const C = (y1 + 1) * w1 + x0, D = (y1 + 1) * w1 + (x1 + 1);
+
+      const s1 = sum[D] - sum[B] - sum[C] + sum[A];
+      const s2 = sqs[D] - sqs[B] - sqs[C] + sqs[A];
+      const mean = s1 / area;
+      const variance = Math.max(0, s2 / area - mean * mean);
+      const std = Math.sqrt(variance);
+
+      const T = mean * (1 + k * (std / R - 1));
+      dst[y * W + x] = src[y * W + x] > T ? 255 : 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Unsharp masking — লেখার কিনারা ধারালো করা।
+ *
+ * ক্যামেরার ছবি লেন্স ও সেন্সরের কারণে সবসময় সামান্য নরম হয়। আসল স্ক্যানারে
+ * কাগজ কাচের সাথে লেগে থাকে বলে ধারালো আসে। সেই পার্থক্য মেটাতে:
+ *   ধারালো = আসল + amount × (আসল − ঝাপসা)
+ * অর্থাৎ ছবি থেকে তার ঝাপসা রূপ বিয়োগ করলে যা থাকে তা-ই কিনারা;
+ * সেটুকু ফিরিয়ে যোগ করলে লেখা স্পষ্ট হয়।
+ */
+function unsharpMask(cv, mat, amount, radius) {
+  const blur = new cv.Mat();
+  const sigma = radius || Math.max(1, Math.round(Math.min(mat.cols, mat.rows) / 500));
+  cv.GaussianBlur(mat, blur, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
+  const a = (amount === undefined ? 0.8 : amount);
+  cv.addWeighted(mat, 1 + a, blur, -a, 0, mat);
+  blur.delete();
+}
+
+/**
+ * White balance — কাগজ সত্যিকারের সাদা করা।
+ *
+ * ঘরের আলো হলদে, ছায়া নীলচে — ফলে কাগজ কখনোই নিখুঁত সাদা আসে না।
+ * প্রতিটি রঙের চ্যানেলে উজ্জ্বল প্রান্তের (৯৫তম পার্সেন্টাইল) মান খুঁজে
+ * সেটাকে ২৪৫-এ টেনে তুললে রঙের ঢাল দূর হয়, কিন্তু লেখার রং অক্ষত থাকে।
+ */
+function balanceChannel(ch) {
+  const hist = new Uint32Array(256);
+  const d = ch.data;
+  for (let j = 0; j < d.length; j++) hist[d[j]]++;
+  let acc = 0, p95 = 255;
+  const target = d.length * 0.95;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) { p95 = v; break; } }
+  const gain = p95 > 10 ? Math.min(1.6, 245 / p95) : 1;
+  if (gain !== 1) ch.convertTo(ch, -1, gain, 0);
+}
+
 function magicColor(imageData) {
   const cv = self.cv;
   let src = null, rgb = null, channels = null, bg = null, out = null, rgba = null, merged = null;
@@ -1138,8 +1241,9 @@ function magicColor(imageData) {
 
     out = new cv.Mat();
     cv.merge(merged, out);
-    // হালকা কনট্রাস্ট: alpha=1.15, beta=-12
-    out.convertTo(out, -1, 1.15, -12);
+    // হালকা কনট্রাস্ট + কিনারা ধারালো — এই দুটোই "স্ক্যানারের মতো" চেহারা দেয়
+    out.convertTo(out, -1, 1.12, -10);
+    unsharpMask(cv, out, 0.7);
 
     rgba = new cv.Mat();
     cv.cvtColor(out, rgba, cv.COLOR_RGB2RGBA, 0);
@@ -1155,26 +1259,39 @@ function applyFilter(imageData, filter) {
   const cv = self.cv;
   if (filter === 'original') return imageData;
   if (filter === 'magic') return magicColor(imageData);
-  
-  let src = null, dst = null, rgba = null;
+
+  let src = null, gray = null, bin = null, rgba = null;
   try {
     src = matFromImageData(imageData);
-    dst = new cv.Mat();
-    cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
+    gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
-    // ছায়া/অসম আলো দূর — grayscale ও scan দুটোতেই
-    const bgg = estimateBackground(cv, dst);
-    if (bgg) { cv.divide(dst, bgg, dst, 235); bgg.delete(); }
+    // ধাপ ১ — আলো সমান করা (ছায়া/অসম আলো দূর)
+    const bgg = estimateBackground(cv, gray);
+    if (bgg) { cv.divide(gray, bgg, gray, 235); bgg.delete(); }
 
     if (filter === 'scan') {
-      cv.GaussianBlur(dst, dst, new cv.Size(5,5), 0, 0, cv.BORDER_DEFAULT);
-      cv.adaptiveThreshold(dst, dst, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 10);
+      // ধাপ ২ — কিনারা ধারালো করা (বাইনারাইজেশনের আগেই, তাতে ফল অনেক পরিষ্কার)
+      unsharpMask(cv, gray, 0.6);
+
+      // ধাপ ৩ — Sauvola স্থানীয় বাইনারাইজেশন (শিল্পমান)
+      bin = sauvolaBinarize(cv, gray, 0.2, 0.025);
+
+      // ধাপ ৪ — বিচ্ছিন্ন দানা মুছে ফেলা (median 3×3 — লেখা অক্ষত থাকে)
+      cv.medianBlur(bin, bin, 3);
+
+      rgba = new cv.Mat();
+      cv.cvtColor(bin, rgba, cv.COLOR_GRAY2RGBA);
+      return { width: rgba.cols, height: rgba.rows, data: new Uint8ClampedArray(rgba.data) };
     }
+
+    // grayscale মোড — আলো সমান + হালকা ধারালো
+    unsharpMask(cv, gray, 0.5);
     rgba = new cv.Mat();
-    cv.cvtColor(dst, rgba, cv.COLOR_GRAY2RGBA);
+    cv.cvtColor(gray, rgba, cv.COLOR_GRAY2RGBA);
     return { width: rgba.cols, height: rgba.rows, data: new Uint8ClampedArray(rgba.data) };
   } finally {
-    [src,dst,rgba].forEach(m => { if (m) m.delete(); });
+    [src, gray, bin, rgba].forEach(m => { if (m) m.delete(); });
   }
 }
 
