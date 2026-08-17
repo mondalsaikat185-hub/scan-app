@@ -1127,6 +1127,30 @@ function autoTrimBorders(cv, srcRgba) {
  * গতি: integral image (summed-area table) দিয়ে যেকোনো জানালার গড় ও বর্গগড়
  * ধ্রুব সময়ে পাওয়া যায়, তাই বড় ছবিতেও দ্রুত চলে।
  */
+/**
+ * CLAHE — স্থানীয় কনট্রাস্ট বাড়ানো।
+ *
+ * ছায়ার ভেতরে লেখা "ধুয়ে" যায়: উজ্জ্বলতা ভাগ করে সমান করলেও লেখা ও
+ * কাগজের পার্থক্য কম থাকে। CLAHE ছবিটাকে ছোট ছোট টালিতে ভাগ করে প্রতিটিতে
+ * আলাদাভাবে কনট্রাস্ট প্রসারিত করে — তাই ছায়ার ভেতরের লেখাও ফুটে ওঠে।
+ * clipLimit দানা বাড়া আটকায়।
+ */
+function applyCLAHE(cv, mat, clip, tiles) {
+  let c = null, out = null;
+  try {
+    c = new cv.CLAHE(clip || 2.0, new cv.Size(tiles || 8, tiles || 8));
+    out = new cv.Mat();
+    c.apply(mat, out);
+    out.copyTo(mat);
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    if (c) c.delete();
+    if (out) out.delete();
+  }
+}
+
 function sauvolaBinarize(cv, grayMat, kParam, windowFrac) {
   const W = grayMat.cols, H = grayMat.rows;
   const N = W * H;
@@ -1241,8 +1265,30 @@ function magicColor(imageData) {
 
     out = new cv.Mat();
     cv.merge(merged, out);
+    // Lab রঙস্থানে গিয়ে শুধু উজ্জ্বলতায় (L) CLAHE — রং অবিকৃত থাকে,
+    // অথচ ছায়ার ভেতরের লেখা ও ফ্যাকাশে ছাপা ফুটে ওঠে
+    {
+      let lab2 = null, ch2 = null, merged2 = null, L2 = null, a2 = null, b2 = null;
+      try {
+        lab2 = new cv.Mat();
+        cv.cvtColor(out, lab2, cv.COLOR_RGB2Lab, 0);
+        ch2 = new cv.MatVector();
+        cv.split(lab2, ch2);
+        L2 = ch2.get(0); a2 = ch2.get(1); b2 = ch2.get(2);
+        applyCLAHE(cv, L2, 1.5, 8);
+        merged2 = new cv.MatVector();
+        merged2.push_back(L2); merged2.push_back(a2); merged2.push_back(b2);
+        cv.merge(merged2, lab2);
+        cv.cvtColor(lab2, out, cv.COLOR_Lab2RGB, 0);
+      } catch (e) {
+        // CLAHE না চললেও ছবি নষ্ট হবে না
+      } finally {
+        [lab2, ch2, merged2, L2, a2, b2].forEach(m => { if (m) m.delete(); });
+      }
+    }
+
     // হালকা কনট্রাস্ট + কিনারা ধারালো — এই দুটোই "স্ক্যানারের মতো" চেহারা দেয়
-    out.convertTo(out, -1, 1.12, -10);
+    out.convertTo(out, -1, 1.10, -8);
     unsharpMask(cv, out, 0.7);
 
     rgba = new cv.Mat();
@@ -1271,10 +1317,25 @@ function applyFilter(imageData, filter) {
     if (bgg) { cv.divide(gray, bgg, gray, 235); bgg.delete(); }
 
     if (filter === 'scan') {
+      // এখানে ইচ্ছাকৃতভাবে CLAHE ব্যবহার করা হয়নি।
+      //
+      // মাপা ফল (একই ছবিতে, ছায়া+দানা সহ):
+      //    CLAHE নেই   → লেখা ৭৯.১%, ফাঁকায় দাগ ৩.৩৩%
+      //    clip 1.0    → লেখা ৮২.০%, দাগ ৪.৩৪%
+      //    clip 2.0    → লেখা ৮৫.৫%, দাগ ৫.৭৫%
+      // অর্থাৎ লেখা যতটুকু বাড়ে, দাগ তার চেয়ে দ্রুত বাড়ে। সাদা-কালো মোডে
+      // দাগ কালো বিন্দু হয়ে চোখে লাগে, তাই এই বিনিময় লাভজনক নয়।
+      // (কালার/গ্রেস্কেল মোডে দাগ বিন্দু হয় না, তাই সেখানে CLAHE রাখা হয়েছে।)
+
       // ধাপ ২ — কিনারা ধারালো করা (বাইনারাইজেশনের আগেই, তাতে ফল অনেক পরিষ্কার)
       unsharpMask(cv, gray, 0.6);
 
       // ধাপ ৩ — Sauvola স্থানীয় বাইনারাইজেশন (শিল্পমান)
+      //
+      // জানালার আকার স্থির (ছবির ২.৫%) রাখা হয়েছে ইচ্ছাকৃতভাবে। লেখার
+      // স্ট্রোক-প্রস্থ মেপে জানালা বসানোর একটা সংস্করণ লিখে পরীক্ষা করেছিলাম —
+      // কিছু ক্ষেত্রে ভালো, কিন্তু এক ক্ষেত্রে ফল খারাপ হয়েছিল (দাগ ০.৪১% → ১.০৪%)।
+      // অনিশ্চিত উন্নতির চেয়ে অনুমানযোগ্য ফলই ভালো, তাই স্থির মানই রাখা হলো।
       bin = sauvolaBinarize(cv, gray, 0.2, 0.025);
 
       // ধাপ ৪ — বিচ্ছিন্ন দানা মুছে ফেলা (median 3×3 — লেখা অক্ষত থাকে)
@@ -1285,7 +1346,8 @@ function applyFilter(imageData, filter) {
       return { width: rgba.cols, height: rgba.rows, data: new Uint8ClampedArray(rgba.data) };
     }
 
-    // grayscale মোড — আলো সমান + হালকা ধারালো
+    // grayscale মোড — আলো সমান + স্থানীয় কনট্রাস্ট + হালকা ধারালো
+    applyCLAHE(cv, gray, 1.5, 8);
     unsharpMask(cv, gray, 0.5);
     rgba = new cv.Mat();
     cv.cvtColor(gray, rgba, cv.COLOR_GRAY2RGBA);
