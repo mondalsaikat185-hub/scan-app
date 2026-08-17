@@ -45,14 +45,14 @@ function resultToCanvas(res) {
   return c;
 }
 
-export async function detectEdges(canvas) {
+export async function detectEdges(canvas, opts) {
   const img = canvasToImageData(canvas);
-  return call('detect', { imageData: img }, [img.data.buffer]);
+  return call('detect', { imageData: img, opts }, [img.data.buffer]);
 }
 
-export async function warpCanvas(canvas, corners) {
+export async function warpCanvas(canvas, corners, opts) {
   const img = canvasToImageData(canvas);
-  const res = await call('warp', { imageData: img, corners }, [img.data.buffer]);
+  const res = await call('warp', { imageData: img, corners, opts }, [img.data.buffer]);
   return resultToCanvas(res);
 }
 

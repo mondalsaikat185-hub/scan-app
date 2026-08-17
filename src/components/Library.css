@@ -338,3 +338,18 @@
   cursor: pointer;
 }
 .sheet-close:hover { background: rgba(148, 163, 184, 0.16); }
+
+.sheet-divider {
+  margin: 16px 10px 6px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+.sheet-hint {
+  margin: 0 10px 8px;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: #94a3b8;
+}

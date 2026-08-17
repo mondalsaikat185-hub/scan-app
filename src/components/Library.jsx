@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { forceUpdate } from '../lib/pwa';
 import { QUALITY_PRESETS } from '../lib/canvasUtils';
+import { CORRECTION_LABELS } from '../lib/settings';
 import './Library.css';
 
 /**
@@ -18,6 +19,7 @@ import './Library.css';
 export default function Library({
   docs, onNewScan, onOpen, onExport, onDelete, onShare, onRename,
   quality, onQualityChange, aiOn, aiReady, onAiToggle,
+  corrections, onCorrectionToggle,
 }) {
   const [thumbnails, setThumbnails] = useState({});
   const [query, setQuery] = useState('');
@@ -182,6 +184,23 @@ export default function Library({
               ))}
             </div>
 
+            <div className="sheet-divider">স্বয়ংক্রিয় সংশোধন</div>
+            <p className="sheet-hint">
+              যত বেশি সংশোধন একসাথে চলে, ভুল হওয়ার সম্ভাবনাও তত বাড়ে।
+              তাই কেবল পরীক্ষিতগুলো ডিফল্টে চালু।
+            </p>
+            {corrections && Object.keys(CORRECTION_LABELS).map((k) => (
+              <button key={k} className="sheet-row" onClick={() => onCorrectionToggle(k)}>
+                <span className="sheet-ico">{corrections[k] ? '✅' : '⬜'}</span>
+                <span className="sheet-text">
+                  <strong>{CORRECTION_LABELS[k].title}</strong>
+                  <small>{CORRECTION_LABELS[k].desc}</small>
+                </span>
+                <span className={`sheet-switch ${corrections[k] ? 'on' : ''}`}><i /></span>
+              </button>
+            ))}
+
+            <div className="sheet-divider">অ্যাপ</div>
             <button className="sheet-row" onClick={forceUpdate}>
               <span className="sheet-ico">↻</span>
               <span className="sheet-text">

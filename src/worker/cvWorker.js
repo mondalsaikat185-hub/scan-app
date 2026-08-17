@@ -301,7 +301,8 @@ function lineIntersect(a1, a2, b1, b2) {
  *  ৪. প্রতিটি প্রার্থীকে তিন দিক থেকে নম্বর: জ্যামিতি + ধারে প্রকৃত edge আছে কিনা
  *     + ভেতর-বাহিরের উজ্জ্বলতার পার্থক্য (কাগজ সাধারণত উজ্জ্বল ও সমসত্ত্ব)।
  */
-function detectEdges(imageData) {
+function detectEdges(imageData, opts) {
+  const dopts = Object.assign({ gutter: false }, opts || {});
   const cv = self.cv;
   const W = imageData.width, H = imageData.height;
   const DETECT_DIM = 800;
@@ -579,7 +580,7 @@ function detectEdges(imageData) {
       // নম্বর খুব কম হলে বিশ্বাস কোরো না
       if (best.sc >= 0.30) {
         let q = snapEdges(best.q);
-        q = refineGutter(cv, Lch, q);
+        if (dopts.gutter) q = refineGutter(cv, Lch, q);
         return q.map(p => ({
           x: Math.max(0, Math.min(W, p.x / scale)),
           y: Math.max(0, Math.min(H, p.y / scale)),
@@ -665,7 +666,15 @@ function quadFromMask(maskData, maskSize, targetW, targetH) {
   }
 }
 
-function warp(imageData, corners) {
+/**
+ * @param opts {deskew, unshear, trim, a4} — কোন স্বয়ংক্রিয় সংশোধন চলবে।
+ *
+ * শিক্ষা: প্রতিটি স্বয়ংক্রিয় সংশোধন "বেশিরভাগ সময়" কাজ করে, কিন্তু সেগুলো
+ * একের পর এক চাপালে ভুলের সম্ভাবনা গুণিতক হারে বাড়ে (৫টা × ১০% ভুল =
+ * ~৪১% পাতা নষ্ট)। তাই এখন কেবল প্রমাণিত সংশোধনই ডিফল্টে চলে।
+ */
+function warp(imageData, corners, opts) {
+  const o = Object.assign({ deskew: true, unshear: false, trim: false, a4: true }, opts || {});
   const cv = self.cv;
   let src = null, dst = null, srcTri = null, dstTri = null, M = null;
   try {
@@ -709,11 +718,13 @@ function warp(imageData, corners) {
     if (ratio < lo || ratio > hi) ratio = Math.min(hi, Math.max(lo, ratio));
 
     // ---------- A4 snap — শুধু মিলে যাওয়া দিকেই ----------
-    const target = measPortrait ? A4_P : A4_L;
-    const tol = confident ? 0.22 : 0.32;
-    if (Math.abs(ratio - target) / target < tol &&
-        Math.abs(target - measRatio) / measRatio < LIMIT) {
-      ratio = target;
+    if (o.a4) {
+      const target = measPortrait ? A4_P : A4_L;
+      const tol = confident ? 0.22 : 0.32;
+      if (Math.abs(ratio - target) / target < tol &&
+          Math.abs(target - measRatio) / measRatio < LIMIT) {
+        ratio = target;
+      }
     }
 
     // আউটপুট সাইজ — সবচেয়ে লম্বা দিকটা মূল মাপ ধরে রাখে (রেজোলিউশন হারায় না)
@@ -736,20 +747,18 @@ function warp(imageData, corners) {
     //  ১. deskew — লেখার লাইন অনুভূমিক করা (ঘূর্ণন)
     //  ২. unshear — লেখার ব্লকের হেলে যাওয়া সোজা করা (শিয়ার)
     let cur = dst, owned = false;
-    const straight = deskewMat(cv, cur);
-    if (straight) { cur = straight; owned = true; }
 
-    const unsheared = unshearText(cv, cur);
-    if (unsheared) {
-      if (owned) cur.delete();
-      cur = unsheared; owned = true;
+    if (o.deskew) {
+      const straight = deskewMat(cv, cur);
+      if (straight) { cur = straight; owned = true; }
     }
-
-    //  ৩. ধারে থেকে যাওয়া গাঢ় ফালি (বেডশিট/টেবিল/ছায়া) ছেঁটে ফেলা
-    const trimmed = autoTrimBorders(cv, cur);
-    if (trimmed) {
-      if (owned) cur.delete();
-      cur = trimmed; owned = true;
+    if (o.unshear) {
+      const unsheared = unshearText(cv, cur);
+      if (unsheared) { if (owned) cur.delete(); cur = unsheared; owned = true; }
+    }
+    if (o.trim) {
+      const trimmed = autoTrimBorders(cv, cur);
+      if (trimmed) { if (owned) cur.delete(); cur = trimmed; owned = true; }
     }
 
     const res = { width: cur.cols, height: cur.rows, data: new Uint8ClampedArray(cur.data) };
@@ -1181,8 +1190,8 @@ self.onmessage = async (e) => {
     if (!ready) throw new Error('OpenCV not ready');
 
     let result;
-    if (type === 'detect')      result = detectEdges(payload.imageData);
-    else if (type === 'warp')   result = warp(payload.imageData, payload.corners);
+    if (type === 'detect')      result = detectEdges(payload.imageData, payload.opts);
+    else if (type === 'warp')   result = warp(payload.imageData, payload.corners, payload.opts);
     else if (type === 'filter') result = applyFilter(payload.imageData, payload.filter);
     else if (type === 'sharpness') result = sharpnessScore(payload.imageData);
     else if (type === 'quadFromMask') result = quadFromMask(payload.mask, payload.size, payload.w, payload.h);

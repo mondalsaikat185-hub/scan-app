@@ -5,6 +5,7 @@ import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
 import { savePdfBlob, canPickLocation } from './lib/saveFile';
+import { loadCorrections, saveCorrections } from './lib/settings';
 
 import Loader from './components/Loader';
 import ImageInput from './components/ImageInput';
@@ -46,6 +47,7 @@ function App() {
   const [aiReady, setAiReady] = useState(false);          // মডেল ফাইল আছে?
   const [saveReq, setSaveReq] = useState(null);           // সেভ ডায়ালগের অনুরোধ
   const [cropKey, setCropKey] = useState(0);              // ঘোরানোর পর এডিটর রিসেট করতে
+  const [corrections, setCorrections] = useState(loadCorrections());  // কোন অটো-সংশোধন চলবে
 
   useEffect(() => {
     // Load OpenCV via Web Worker
@@ -158,7 +160,7 @@ function App() {
           } catch (e) { console.warn('AI detect skipped', e); }
         }
         // ২. না পারলে ক্লাসিক OpenCV পদ্ধতি
-        if (!corners) corners = await detectEdges(canvas);
+        if (!corners) corners = await detectEdges(canvas, { gutter: corrections.gutter });
       }
       setInitialCorners(corners);
       setStep('crop');
@@ -181,7 +183,7 @@ function App() {
     setBusy(true);
     setLastCorners(finalCorners);
     try {
-      const warped = await warpCanvas(imageCanvas, finalCorners);
+      const warped = await warpCanvas(imageCanvas, finalCorners, corrections);
       setWarpedCanvas(warped);
       setStep('enhance');
     } catch (err) {
@@ -368,6 +370,12 @@ function App() {
           aiOn={aiOn}
           aiReady={aiReady}
           onAiToggle={(v) => { setAIEnabled(v); setAiOn(v); }}
+          corrections={corrections}
+          onCorrectionToggle={(k) => {
+            const next = { ...corrections, [k]: !corrections[k] };
+            setCorrections(next);
+            saveCorrections(next);
+          }}
         />
       )}
 
