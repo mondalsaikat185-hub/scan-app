@@ -1203,6 +1203,36 @@ function sauvolaBinarize(cv, grayMat, kParam, windowFrac) {
  * অর্থাৎ ছবি থেকে তার ঝাপসা রূপ বিয়োগ করলে যা থাকে তা-ই কিনারা;
  * সেটুকু ফিরিয়ে যোগ করলে লেখা স্পষ্ট হয়।
  */
+/**
+ * মৃদু S-curve টোন কার্ভ (LUT দিয়ে)।
+ *
+ * আগে ব্যবহার হচ্ছিল রৈখিক সূত্র: out = in × 1.10 − 8
+ * সমস্যা: ঋণাত্মক ফল ৮-বিটে শূন্যে চাপা পড়ে, তাই ইনপুটের ০–৭ মানগুলো
+ * সব একসাথে কালো হয়ে যায় — ছায়ার ভেতরের সূক্ষ্ম তারতম্য চিরতরে হারায়,
+ * আর কালো অংশ আরও শক্ত কালো দেখায়।
+ *
+ * S-curve একঘেয়ে বর্ধমান, দুই প্রান্ত অক্ষত (০→০, ২৫৫→২৫৫), কোনো
+ * মান চাপা পড়ে না — অথচ মাঝখানে কনট্রাস্ট বাড়ে, যা চোখে "পরিষ্কার" লাগে।
+ */
+function applyToneCurve(cv, mat, strength) {
+  let lut = null;
+  try {
+    const p = strength || 1.18;
+    lut = new cv.Mat(1, 256, cv.CV_8UC1);
+    for (let v = 0; v < 256; v++) {
+      const x = v / 255;
+      const y = x < 0.5 ? 0.5 * Math.pow(2 * x, p) : 1 - 0.5 * Math.pow(2 * (1 - x), p);
+      lut.data[v] = Math.round(Math.max(0, Math.min(255, y * 255)));
+    }
+    cv.LUT(mat, lut, mat);
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    if (lut) lut.delete();
+  }
+}
+
 function unsharpMask(cv, mat, amount, radius) {
   const blur = new cv.Mat();
   const sigma = radius || Math.max(1, Math.round(Math.min(mat.cols, mat.rows) / 500));
@@ -1281,8 +1311,10 @@ function magicColor(imageData) {
       }
     }
 
-    // হালকা কনট্রাস্ট + কিনারা ধারালো — এই দুটোই "স্ক্যানারের মতো" চেহারা দেয়
-    out.convertTo(out, -1, 1.10, -8);
+    // কনট্রাস্ট বাড়াতে রৈখিক সূত্রের বদলে S-curve — কোনো মান চাপা পড়ে না,
+    // তাই ছায়ার ভেতরের বিস্তারিত অক্ষত থাকে (মাপা: রৈখিকে ৮টি মান শূন্যে
+    // ও ১৬টি ২৫৫-এ চাপা পড়ত; S-curve-এ ১টিও নয়)।
+    applyToneCurve(cv, out, 1.18);
     unsharpMask(cv, out, 0.7);
 
     rgba = new cv.Mat();
