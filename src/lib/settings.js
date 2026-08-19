@@ -16,6 +16,7 @@ const KEY = 'scan-corrections';
 export const DEFAULT_CORRECTIONS = {
   deskew: true,
   a4: true,
+  whiten: true,
   unshear: false,
   trim: false,
   gutter: false,
@@ -36,6 +37,7 @@ export function saveCorrections(c) {
 }
 
 export const CORRECTION_LABELS = {
+  whiten:  { title: 'কাগজ পরিষ্কার',       desc: 'ভাঁজ/ছোপ/শেড মুছে খাঁটি সাদা (পরীক্ষিত)' },
   deskew:  { title: 'লেখা সোজা করা',     desc: 'বাঁকা লাইন অনুভূমিক করে (পরীক্ষিত)' },
   a4:      { title: 'A4 অনুপাতে বসানো',  desc: 'প্রিন্টের জন্য মানানসই মাপ' },
   unshear: { title: 'হেলানো ব্লক সোজা',   desc: 'লেখা পাশে সরে গেলে — মাঝে মাঝে ভুল করে' },

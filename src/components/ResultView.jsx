@@ -3,7 +3,7 @@ import { canvasToBlob, rotateCanvas } from '../lib/canvasUtils';
 import { filterCanvas } from '../lib/cvClient';
 import './ResultView.css';
 
-export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage, initialFilter = 'magic', initialRotation = 0, isEditing = false }) {
+export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage, initialFilter = 'magic', initialRotation = 0, isEditing = false, corrections }) {
   const [filter, setFilter] = useState(initialFilter);
   const [rotation, setRotation] = useState(initialRotation);  // ০/৯০/১৮০/২৭০
   const [finalCanvas, setFinalCanvas] = useState(null);
@@ -18,7 +18,7 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
       setIsProcessing(true);
       try {
         const rotated = rotateCanvas(warpedCanvas, rotation);
-        const result = await filterCanvas(rotated, filter);
+        const result = await filterCanvas(rotated, filter, corrections);
         if (!cancelled) setFinalCanvas(result);
       } catch (err) {
         console.error(err);
@@ -27,7 +27,7 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
       }
     })();
     return () => { cancelled = true; };
-  }, [filter, rotation, warpedCanvas]);
+  }, [filter, rotation, warpedCanvas, corrections]);
 
   useEffect(() => {
     if (!finalCanvas || !canvasRef.current || !containerRef.current) return;

@@ -426,6 +426,7 @@ function App() {
           onDiscard={handleCancelScan}
           initialFilter={editingIndex !== null ? editFilter : 'magic'}
           initialRotation={editingIndex !== null ? editRotation : 0}
+          corrections={corrections}
           isEditing={editingIndex !== null}
         />
       )}

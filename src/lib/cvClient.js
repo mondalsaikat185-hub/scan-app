@@ -67,9 +67,9 @@ export async function quadFromMask(mask, size, w, h) {
   return call('quadFromMask', { mask, size, w, h }, [mask.buffer]);
 }
 
-export async function filterCanvas(canvas, filter) {
+export async function filterCanvas(canvas, filter, opts) {
   if (filter === 'original') return canvas;
   const img = canvasToImageData(canvas);
-  const res = await call('filter', { imageData: img, filter }, [img.data.buffer]);
+  const res = await call('filter', { imageData: img, filter, opts }, [img.data.buffer]);
   return resultToCanvas(res);
 }
