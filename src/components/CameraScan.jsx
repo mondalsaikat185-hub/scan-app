@@ -102,21 +102,79 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
   const [stablePct, setStablePct] = useState(0);
   const [hint, setHint] = useState('কাগজ ফ্রেমে আনুন');
 
-  // ---- ক্যাপচার: পুরো রেজোলিউশনের ফ্রেম + কোণা স্কেল-আপ ----
-  const capture = useCallback((quadSmall) => {
+  // ---- ভিডিও ফ্রেম থেকে ছবি (পুরোনো, নিশ্চিত পদ্ধতি — ফলব্যাক) ----
+  const grabVideoFrame = () => {
+    const video = videoRef.current;
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth;
+    c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    return c;
+  };
+
+  /**
+   * ---- ক্যাপচার ----
+   *
+   * কেন দুটো পথ:
+   * ভিডিও স্ট্রিমের ফ্রেম আর ক্যামেরার আসল ছবি এক জিনিস নয়। ভিডিও প্রিভিউ
+   * কম রেজোলিউশনের, বেশি কম্প্রেস করা, আর ফোনের ছবি-প্রক্রিয়াকরণ (একাধিক
+   * ফ্রেম মিলিয়ে দানা কমানো, HDR, শার্পনিং) ওতে হয় না। সেজন্যই গ্যালারির
+   * ছবি (যা ক্যামেরা অ্যাপের পুরো প্রক্রিয়ার ফল) অনেক পরিষ্কার আসছিল, আর
+   * সরাসরি ক্যামেরার ছবিতে দাগ/দানা থেকে যাচ্ছিল।
+   *
+   * সমাধান: ImageCapture API-র takePhoto() — এটা ক্যামেরার **স্থিরচিত্রের
+   * পথ** ব্যবহার করে, তাই পুরো রেজোলিউশন ও সঠিক এক্সপোজার পাওয়া যায়।
+   * যেসব ব্রাউজারে এটা নেই (যেমন Safari), সেখানে আগের ভিডিও-ফ্রেম পদ্ধতিই
+   * চলবে — অর্থাৎ কিছু ভাঙার ঝুঁকি নেই।
+   */
+  const capture = useCallback(async (quadSmall) => {
     if (capturingRef.current) return;
     capturingRef.current = true;
     runningRef.current = false;
+
     const video = videoRef.current;
-    const full = document.createElement('canvas');
-    full.width = video.videoWidth;
-    full.height = video.videoHeight;
-    full.getContext('2d').drawImage(video, 0, 0);
+    const detectW = detectCanvasRef.current.width;
+    const detectH = detectCanvasRef.current.height;
+    let full = null;
+
+    setHint('ছবি তোলা হচ্ছে — স্থির থাকুন…');
+
+    // ---- ১. চেষ্টা: আসল স্থিরচিত্র ----
+    try {
+      const track = streamRef.current && streamRef.current.getVideoTracks()[0];
+      if (track && typeof window.ImageCapture === 'function') {
+        const ic = new window.ImageCapture(track);
+        const blob = await ic.takePhoto();
+        const bmp = await createImageBitmap(blob);
+        const c = document.createElement('canvas');
+        c.width = bmp.width; c.height = bmp.height;
+        c.getContext('2d').drawImage(bmp, 0, 0);
+        bmp.close();
+        full = c;
+      }
+    } catch (e) {
+      console.warn('takePhoto unavailable, using video frame', e);
+    }
+
+    // ---- ২. না পারলে আগের পদ্ধতি ----
+    let usedPhoto = !!full;
+    if (!full) full = grabVideoFrame();
+
+    // ---- কোণা মানানসই কিনা ----
+    // স্থিরচিত্রের অনুপাত প্রিভিউয়ের চেয়ে আলাদা হতে পারে (অনেক ফোনে ছবি 4:3,
+    // প্রিভিউ 16:9)। অনুপাত না মিললে কোণা স্কেল করলে ভুল জায়গায় বসবে —
+    // তখন null পাঠাই, App নিজেই নতুন করে ডিটেক্ট করে নেবে।
     let corners = null;
     if (quadSmall) {
-      const k = video.videoWidth / detectCanvasRef.current.width;
-      corners = quadSmall.map(p => ({ x: p.x * k, y: p.y * k }));
+      const previewAR = detectW / detectH;
+      const photoAR = full.width / full.height;
+      const arMatches = Math.abs(previewAR - photoAR) / previewAR < 0.02;
+      if (!usedPhoto || arMatches) {
+        const k = full.width / detectW;
+        corners = quadSmall.map(p => ({ x: p.x * k, y: p.y * k }));
+      }
     }
+
     onCaptured(full, corners);   // App এটাকে crop স্ক্রিনে পাঠাবে
   }, [onCaptured]);
 
