@@ -51,18 +51,29 @@ export default function CornerEditor({ imageCanvas, initialCorners, onComplete, 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(imageCanvas, 0, 0, canvas.width, canvas.height);
 
-    // Draw polygon overlay
+    // CamScanner-স্টাইল: ভিতরের কাগজ পরিষ্কার রেখে বাইরের অপ্রয়োজনীয় অংশে ডার্ক মাস্ক
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.60)';
+    ctx.beginPath();
+    ctx.rect(0, 0, canvas.width, canvas.height);
+    // ভিতরের অংশ কেটে বের করা (কাউন্টার-ক্লকওয়াইজ)
+    ctx.moveTo(corners[0].x * scale, corners[0].y * scale);
+    ctx.lineTo(corners[3].x * scale, corners[3].y * scale);
+    ctx.lineTo(corners[2].x * scale, corners[2].y * scale);
+    ctx.lineTo(corners[1].x * scale, corners[1].y * scale);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // সবুজ বর্ডার
     ctx.beginPath();
     ctx.moveTo(corners[0].x * scale, corners[0].y * scale);
     ctx.lineTo(corners[1].x * scale, corners[1].y * scale);
     ctx.lineTo(corners[2].x * scale, corners[2].y * scale);
     ctx.lineTo(corners[3].x * scale, corners[3].y * scale);
     ctx.closePath();
-    
-    ctx.fillStyle = 'rgba(59, 130, 246, 0.3)'; // blue tint
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#4ade80'; // green border
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#10b981';
     ctx.stroke();
 
     // ধার টানা হলে সেটাকে মোটা করে দেখাও

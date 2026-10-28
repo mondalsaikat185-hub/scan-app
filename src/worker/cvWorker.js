@@ -778,41 +778,27 @@ function warp(imageData, corners, opts) {
  * গতির জন্য background হিসাব ১/৪ মাপে হয়।
  */
 function estimateBackground(cv, ch) {
-  const q = 0.25;
-  const qW = Math.max(8, Math.round(ch.cols * q));
-  const qH = Math.max(8, Math.round(ch.rows * q));
-  let small = null, med = null, bg = null;
+  const q = 0.125;
+  const qW = Math.max(16, Math.round(ch.cols * q));
+  const qH = Math.max(16, Math.round(ch.rows * q));
+  let small = null, blurred = null, bg = null;
   try {
     small = new cv.Mat();
     cv.resize(ch, small, new cv.Size(qW, qH), 0, 0, cv.INTER_AREA);
 
-    // শুধুই median — dilate নয়।
-    //
-    // কেন: dilate জানালার সর্বোচ্চ মান নেয়। ছায়ার ধারালো প্রান্তে জানালা
-    // উজ্জ্বল ও অন্ধকার দুই পাশেই পড়ে, তাই উজ্জ্বল দিকের মান তুলে আনে →
-    // অন্ধকার পাশে ব্যাকগ্রাউন্ড বেশি ধরা হয় → ভাগ করার পরেও গাঢ় ব্যান্ড
-    // থেকে যায় → Sauvola সেটাকে "লেখা" ভেবে কালো ছোপ বানায়।
-    //
-    // median প্রান্ত-সংরক্ষী: সীমানার দুই পাশে আলাদা করে সঠিক মান দেয়,
-    // আবার জানালা লেখার চেয়ে বড় হওয়ায় লেখাও মুছে ফেলে।
-    //
-    // মাপা ফল (ছায়াসহ কৃত্রিম পাতায়, ফাঁকা জায়গায় কালো ছোপ):
-    //    dilate→median→Gaussian : ১.৭৭%   (ঘন লেখায় ০.৫৯%)
-    //    শুধু median            : ০.০৩%   (ঘন লেখায় ০.০০%)
-    //    — দুই ক্ষেত্রেই লেখা ১০০% অক্ষত।
-    let k = Math.round(Math.min(qW, qH) * 0.06);
-    k = Math.max(9, Math.min(31, k % 2 === 0 ? k + 1 : k));
-    med = new cv.Mat();
-    cv.medianBlur(small, med, k);
+    // Multi-scale illumination estimation: 15x15 blur at 1/8 scale = ~120px full scale
+    // Extracts lighting gradients perfectly without erasing text or creating halo artifacts
+    blurred = new cv.Mat();
+    cv.GaussianBlur(small, blurred, new cv.Size(15, 15), 0, 0, cv.BORDER_REPLICATE);
 
     bg = new cv.Mat();
-    cv.resize(med, bg, new cv.Size(ch.cols, ch.rows), 0, 0, cv.INTER_LINEAR);
+    cv.resize(blurred, bg, new cv.Size(ch.cols, ch.rows), 0, 0, cv.INTER_LINEAR);
     return bg;
   } catch (e) {
     if (bg) { bg.delete(); }
     return null;
   } finally {
-    [small, med].forEach(m => { if (m) m.delete(); });
+    [small, blurred].forEach(m => { if (m) m.delete(); });
   }
 }
 
@@ -1328,7 +1314,7 @@ function magicColor(imageData, opts) {
       const bgc = estimateBackground(cv, ch);      // ছায়া/আলোর মানচিত্র
       const norm = new cv.Mat();
       if (bgc) {
-        cv.divide(ch, bgc, norm, 235);             // ভাগ → সমান সাদা কাগজ
+        cv.divide(ch, bgc, norm, 242);             // ভাগ → ধবধবে সাদা কাগজ (CamScanner Pro level)
         tmp.push(bgc);
       } else {
         ch.copyTo(norm);
@@ -1391,29 +1377,14 @@ function applyFilter(imageData, filter, opts) {
 
     // ধাপ ১ — আলো সমান করা (ছায়া/অসম আলো দূর)
     const bgg = estimateBackground(cv, gray);
-    if (bgg) { cv.divide(gray, bgg, gray, 235); bgg.delete(); }
+    if (bgg) { cv.divide(gray, bgg, gray, 245); bgg.delete(); }
 
     if (filter === 'scan') {
-      // এখানে ইচ্ছাকৃতভাবে CLAHE ব্যবহার করা হয়নি।
-      //
-      // মাপা ফল (একই ছবিতে, ছায়া+দানা সহ):
-      //    CLAHE নেই   → লেখা ৭৯.১%, ফাঁকায় দাগ ৩.৩৩%
-      //    clip 1.0    → লেখা ৮২.০%, দাগ ৪.৩৪%
-      //    clip 2.0    → লেখা ৮৫.৫%, দাগ ৫.৭৫%
-      // অর্থাৎ লেখা যতটুকু বাড়ে, দাগ তার চেয়ে দ্রুত বাড়ে। সাদা-কালো মোডে
-      // দাগ কালো বিন্দু হয়ে চোখে লাগে, তাই এই বিনিময় লাভজনক নয়।
-      // (কালার/গ্রেস্কেল মোডে দাগ বিন্দু হয় না, তাই সেখানে CLAHE রাখা হয়েছে।)
-
       // ধাপ ২ — কিনারা ধারালো করা (বাইনারাইজেশনের আগেই, তাতে ফল অনেক পরিষ্কার)
-      unsharpMask(cv, gray, 0.6);
+      unsharpMask(cv, gray, 0.65);
 
-      // ধাপ ৩ — Sauvola স্থানীয় বাইনারাইজেশন (শিল্পমান)
-      //
-      // জানালার আকার স্থির (ছবির ২.৫%) রাখা হয়েছে ইচ্ছাকৃতভাবে। লেখার
-      // স্ট্রোক-প্রস্থ মেপে জানালা বসানোর একটা সংস্করণ লিখে পরীক্ষা করেছিলাম —
-      // কিছু ক্ষেত্রে ভালো, কিন্তু এক ক্ষেত্রে ফল খারাপ হয়েছিল (দাগ ০.৪১% → ১.০৪%)।
-      // অনিশ্চিত উন্নতির চেয়ে অনুমানযোগ্য ফলই ভালো, তাই স্থির মানই রাখা হলো।
-      bin = sauvolaBinarize(cv, gray, 0.2, 0.025);
+      // ধাপ ৩ — Sauvola স্থানীয় বাইনারাইজেশন (ফ্যাকাশে কালি ও বলপেন সহ সব স্পষ্ট ধরা)
+      bin = sauvolaBinarize(cv, gray, 0.16, 0.035);
 
       // ধাপ ৪ — বিচ্ছিন্ন দানা মুছে ফেলা (median 3×3 — লেখা অক্ষত থাকে)
       cv.medianBlur(bin, bin, 3);

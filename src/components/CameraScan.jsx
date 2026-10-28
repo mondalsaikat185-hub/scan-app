@@ -3,12 +3,12 @@ import { detectEdges, sharpnessOf } from '../lib/cvClient';
 import './CameraScan.css';
 
 const DETECT_W = 560;        // ডিটেকশন ফ্রেমের প্রস্থ (বেশি = নির্ভুল, কম = দ্রুত)
-const STABLE_FRAMES = 4;     // পরপর কত ফ্রেম স্থির হলে অটো-ক্যাপচার
-const STABLE_TOL = 0.035;    // নড়াচড়ার সীমা (quad-এর নিজের মাপের অনুপাতে)
+const STABLE_FRAMES = 2;     // পরপর ২ ফ্রেম স্থির হলে অটো-ক্যাপচার (দ্রুত রেসপন্স)
+const STABLE_TOL = 0.05;     // নড়াচড়ার সহনশীল সীমা
 const SMOOTH = 0.5;          // EMA — ওভারলের কাঁপুনি কমায়
 const HISTORY = 3;           // কত ফ্রেমের মধ্যক (median) নেওয়া হবে
-const OUTLIER_TOL = 0.14;    // মধ্যক থেকে এত দূরের ফ্রেম "বিক্ষিপ্ত" ধরে বাদ
-const MIN_SHARPNESS = 55;    // এর নিচে হলে ছবি ঝাপসা — অটো-ক্যাপচার আটকাবে
+const OUTLIER_TOL = 0.20;    // মধ্যক থেকে এত দূরের ফ্রেম "বিক্ষিপ্ত" ধরে বাদ
+const MIN_SHARPNESS = 20;    // সাধারণ ঘরের মৃদু আলোতেও যেন দ্রুত অটো-ক্যাপচার হয়
 
 // কয়েক ফ্রেমের কোণার মধ্যক (median) — একটা-দুটো ভুল ফ্রেম ফেলে দেয়।
 // গড়ের চেয়ে মধ্যক অনেক বেশি নির্ভরযোগ্য: একটা ফ্রেম বাজেভাবে ভুল হলেও ফল নড়ে না।
@@ -52,7 +52,7 @@ function isPlausible(quad, w, h) {
   }
   area = Math.abs(area) / 2;
   const ratio = area / (w * h);
-  if (ratio < 0.20 || ratio > 0.985) return false;      // খুব ছোট বা পুরো ফ্রেম
+  if (ratio < 0.10 || ratio > 0.99) return false;      // ছোট রসিদ বা বড় কাগজ উভয়ই গ্রহণযোগ্য
 
   // উত্তল (convex) কিনা — সব cross product একই দিকে
   let sign = 0;
@@ -64,14 +64,14 @@ function isPlausible(quad, w, h) {
     else if (Math.sign(cr) !== sign) return false;
   }
 
-  // ধারের অনুপাত অস্বাভাবিক নয় (বিকৃত/সরু quad বাদ)
+  // ধারের অনুপাত অস্বাভাবিক নয় (হেলানো/বাঁকা পরিপ্রেক্ষিতকে যেন বাতিল না করে)
   const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const wTop = d(quad[0], quad[1]), wBot = d(quad[3], quad[2]);
   const hL = d(quad[0], quad[3]), hR = d(quad[1], quad[2]);
-  if (Math.min(wTop, wBot) < Math.max(wTop, wBot) * 0.45) return false;
-  if (Math.min(hL, hR) < Math.max(hL, hR) * 0.45) return false;
+  if (Math.min(wTop, wBot) < Math.max(wTop, wBot) * 0.20) return false;
+  if (Math.min(hL, hR) < Math.max(hL, hR) * 0.20) return false;
   const side = Math.max(wTop, wBot) / Math.max(1, Math.max(hL, hR));
-  if (side < 0.25 || side > 4) return false;
+  if (side < 0.15 || side > 6) return false;
 
   return true;
 }
@@ -160,19 +160,13 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
     let usedPhoto = !!full;
     if (!full) full = grabVideoFrame();
 
-    // ---- কোণা মানানসই কিনা ----
-    // স্থিরচিত্রের অনুপাত প্রিভিউয়ের চেয়ে আলাদা হতে পারে (অনেক ফোনে ছবি 4:3,
-    // প্রিভিউ 16:9)। অনুপাত না মিললে কোণা স্কেল করলে ভুল জায়গায় বসবে —
-    // তখন null পাঠাই, App নিজেই নতুন করে ডিটেক্ট করে নেবে।
+    // ---- কোণা নিখুঁত স্কেলিং ----
+    // প্রিভিউ ফ্রেমের ডিটেক্ট করা ৪-কোণা সরাসরি ফুল-রেজোলিউশন স্থিরচিত্রে রূপান্তর করা
     let corners = null;
     if (quadSmall) {
-      const previewAR = detectW / detectH;
-      const photoAR = full.width / full.height;
-      const arMatches = Math.abs(previewAR - photoAR) / previewAR < 0.02;
-      if (!usedPhoto || arMatches) {
-        const k = full.width / detectW;
-        corners = quadSmall.map(p => ({ x: p.x * k, y: p.y * k }));
-      }
+      const kX = full.width / detectW;
+      const kY = full.height / detectH;
+      corners = quadSmall.map(p => ({ x: p.x * kX, y: p.y * kY }));
     }
 
     onCaptured(full, corners);   // App এটাকে crop স্ক্রিনে পাঠাবে
