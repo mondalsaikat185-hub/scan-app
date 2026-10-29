@@ -1364,7 +1364,253 @@ function magicColor(imageData, opts) {
   }
 }
 
+// ================== ENHANCE v2 — "paper-model" background ==================
+//
+// পুরোনো পদ্ধতির মূল সমস্যা: আলোর মানচিত্র (background) বানাতে গোটা ছবিকেই
+// ঝাপসা করা হতো — তাতে লেখার কালি, মোটা হেডার, কালো বক্স, ছবি সবই "আলো"
+// হিসেবে ঢুকে যেত। ফলে ওই জায়গাগুলোয় ভাগ করার পর লেখা ফ্যাকাশে হতো,
+// চারপাশে ছোপ (halo) পড়ত, আর CLAHE কাগজের দানা ফুলিয়ে তুলত।
+//
+// নতুন পদ্ধতি (বাণিজ্যিক স্ক্যানারের মতো "কাগজের মডেল"):
+//  ১. শুধু যে পিক্সেলগুলো সত্যিই ফাঁকা কাগজ, সেগুলো বেছে নেওয়া হয়।
+//  ২. বাকি জায়গায় (লেখা/বক্স/ছবি/স্ট্যাম্প) আলোর মান আশপাশের কাগজ থেকে
+//     push-pull পদ্ধতিতে ভরাট করা হয় — তাই কালো জিনিস আলোর মানচিত্রে ঢোকে না।
+//  ৩. প্রতিটি রঙের চ্যানেল আলাদা ভাগ → ছায়া, অসম আলো ও হলদে আভা একসাথে দূর।
+//  ৪. "লেভেল": কাগজ → খাঁটি সাদা, কালি → গাঢ়; মাঝের ধূসর অক্ষত (কিনারা মসৃণ)।
+
+// push-pull: ওজনসহ বিন্দু থেকে ফাঁকা জায়গা ভরাট (W×H, C চ্যানেল)
+function pushPullFill(vals, wts, W, H, C) {
+  const levels = [{ v: vals, w: wts, W, H }];
+  while (levels[levels.length - 1].W > 4 && levels[levels.length - 1].H > 4) {
+    const p = levels[levels.length - 1];
+    const W2 = Math.ceil(p.W / 2), H2 = Math.ceil(p.H / 2);
+    const v2 = new Float32Array(W2 * H2 * C), w2 = new Float32Array(W2 * H2);
+    for (let y = 0; y < p.H; y++) {
+      const y2 = y >> 1;
+      for (let x = 0; x < p.W; x++) {
+        const i = y * p.W + x, j = y2 * W2 + (x >> 1);
+        const w = p.w[i];
+        if (w <= 0) continue;
+        w2[j] += w;
+        for (let c = 0; c < C; c++) v2[j * C + c] += p.v[i * C + c];  // v already weighted
+      }
+    }
+    levels.push({ v: v2, w: w2, W: W2, H: H2 });
+  }
+  // coarsest: normalize
+  for (let L = levels.length - 1; L >= 0; L--) {
+    const p = levels[L];
+    if (L === levels.length - 1) {
+      // fully normalize; if a pixel has zero weight use global mean
+      let gs = new Float64Array(C), gw = 0;
+      for (let i = 0; i < p.W * p.H; i++) { gw += p.w[i]; for (let c = 0; c < C; c++) gs[c] += p.v[i * C + c]; }
+      for (let i = 0; i < p.W * p.H; i++) {
+        for (let c = 0; c < C; c++) p.v[i * C + c] = p.w[i] > 0 ? p.v[i * C + c] / p.w[i] : (gw > 0 ? gs[c] / gw : 200);
+        p.w[i] = 1;
+      }
+      continue;
+    }
+    const q = levels[L + 1];   // already normalized (w=1, v = value)
+    for (let y = 0; y < p.H; y++) {
+      // bilinear sample from coarse
+      const fy = Math.min(q.H - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+      const y0 = Math.floor(fy), y1 = Math.min(q.H - 1, y0 + 1), ty = fy - y0;
+      for (let x = 0; x < p.W; x++) {
+        const fx = Math.min(q.W - 1, Math.max(0, (x + 0.5) / 2 - 0.5));
+        const x0 = Math.floor(fx), x1 = Math.min(q.W - 1, x0 + 1), tx = fx - x0;
+        const i = y * p.W + x;
+        const w = Math.min(1, p.w[i]);
+        for (let c = 0; c < C; c++) {
+          const a = q.v[(y0 * q.W + x0) * C + c], b = q.v[(y0 * q.W + x1) * C + c];
+          const cc = q.v[(y1 * q.W + x0) * C + c], d = q.v[(y1 * q.W + x1) * C + c];
+          const coarse = (a * (1 - tx) + b * tx) * (1 - ty) + (cc * (1 - tx) + d * tx) * ty;
+          const own = p.w[i] > 0 ? p.v[i * C + c] / p.w[i] : 0;
+          p.v[i * C + c] = w * own + (1 - w) * coarse;
+        }
+        p.w[i] = 1;
+      }
+    }
+  }
+  return levels[0].v;
+}
+
+/**
+ * কাগজের আলো-মানচিত্র (RGB), ছোট মাপে হিসাব করে পূর্ণ মাপে CV_8UC3।
+ * rgb: CV_8UC3 (পূর্ণ মাপ)
+ */
+function paperBackground(cv, rgb) {
+  const W = rgb.cols, H = rgb.rows;
+  const sc = Math.min(1, 900 / Math.max(W, H));
+  const sW = Math.max(16, Math.round(W * sc)), sH = Math.max(16, Math.round(H * sc));
+  let dil = null, small = null, gray = null, lmax = null, lmaxS = null, k1 = null, k2 = null, k3 = null, bgS = null, bg = null;
+  try {
+    // ১. পাতলা লেখা মুছতে পূর্ণ মাপে ছোট closing, তারপর ছোট করা
+    const kr = Math.max(3, Math.round(Math.max(W, H) / 650) * 2 + 1);   // ~5px @2600
+    k1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kr, kr));
+    dil = new cv.Mat();
+    // closing (dilate→erode): পাতলা লেখা মোছে, কিন্তু ছায়ার ধার যেখানে ছিল সেখানেই থাকে
+    cv.morphologyEx(rgb, dil, cv.MORPH_CLOSE, k1);
+    small = new cv.Mat();
+    cv.resize(dil, small, new cv.Size(sW, sH), 0, 0, cv.INTER_AREA);
+    gray = new cv.Mat();
+    cv.cvtColor(small, gray, cv.COLOR_RGB2GRAY, 0);
+
+    // ২. স্থানীয় সর্বোচ্চ উজ্জ্বলতা (কাগজের আনুমানিক মাত্রা)
+    // দুই মাপের স্থানীয় সর্বোচ্চ: ছোট জানালা (ছায়ার ধার মানে), বড় জানালা (কালো বক্স/ছবি বাদ)
+    const kk = Math.max(5, Math.round(Math.max(sW, sH) * 0.06) | 1);
+    k2 = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(kk, kk));
+    lmax = new cv.Mat();
+    cv.dilate(gray, lmax, k2);
+    cv.blur(lmax, lmax, new cv.Size(kk, kk));
+    const ks = Math.max(3, Math.round(Math.max(sW, sH) * 0.008) | 1);
+    k3 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(ks, ks));
+    lmaxS = new cv.Mat();
+    cv.dilate(gray, lmaxS, k3);
+
+    // ৩. কাগজ-পিক্সেল বাছাই: স্থানীয় সর্বোচ্চের কাছাকাছি, রঙহীন, মসৃণ
+    const n = sW * sH;
+    const g = gray.data, lm = lmax.data, ls = lmaxS.data, s = small.data;
+    const isPaper = new Uint8Array(n);
+    const PS = 0.85, PL = 0.45;
+    for (let i = 0; i < n; i++) {
+      const r = s[i * 3], gg = s[i * 3 + 1], b = s[i * 3 + 2];
+      const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+      const sat = mx > 0 ? (mx - mn) / mx : 0;
+      isPaper[i] = (g[i] >= PS * ls[i] && g[i] >= PL * lm[i] && g[i] > 20 && sat < 0.35) ? 1 : 0;
+    }
+    // কিনারার কাছের পিক্সেল বাদ (লেখার ধারের ধূসর আভা)
+    const vals = new Float32Array(n * 3), wts = new Float32Array(n);
+    for (let y = 0; y < sH; y++) for (let x = 0; x < sW; x++) {
+      const i = y * sW + x;
+      if (!isPaper[i]) continue;
+      let ok = 1;
+      for (let dy = -1; dy <= 1 && ok; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X >= 0 && Y >= 0 && X < sW && Y < sH && !isPaper[Y * sW + X]) { ok = 0; break; }
+      }
+      if (!ok) continue;
+      wts[i] = 1;
+      vals[i * 3] = s[i * 3]; vals[i * 3 + 1] = s[i * 3 + 1]; vals[i * 3 + 2] = s[i * 3 + 2];
+    }
+    const filled = pushPullFill(vals, wts, sW, sH, 3);
+    bgS = new cv.Mat(sH, sW, cv.CV_8UC3);
+    for (let i = 0; i < n * 3; i++) bgS.data[i] = Math.max(1, Math.min(255, Math.round(filled[i])));
+    // মসৃণ (ধাপ-ধাপ ভাব দূর)
+    const gk = 3;
+    cv.GaussianBlur(bgS, bgS, new cv.Size(gk, gk), 0, 0, cv.BORDER_REPLICATE);
+    bg = new cv.Mat();
+    cv.resize(bgS, bg, new cv.Size(W, H), 0, 0, cv.INTER_LINEAR);
+    return bg;
+  } catch (e) {
+    if (bg) bg.delete();
+    return null;
+  } finally {
+    [dil, small, gray, lmax, lmaxS, k1, k2, k3, bgS].forEach(m => { if (m) m.delete(); });
+  }
+}
+
+// কালির মাত্রা (normalized luminance-এর অন্ধকার অংশের মধ্যক) — লেভেল ঠিক করতে
+function inkLevel(normL, n) {
+  const hist = new Uint32Array(256);
+  let cnt = 0;
+  for (let i = 0; i < n; i += 3) { const v = normL[i]; if (v < 160) { hist[v]++; cnt++; } }
+  if (cnt < 50) return 60;
+  let acc = 0;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= cnt * 0.5) return v; }
+  return 60;
+}
+
+/**
+ * mode: 'magic' | 'grayscale' | 'scan'
+ */
+function enhanceV2(imageData, mode, opts) {
+  const cv = self.cv;
+  let src = null, rgb = null, bg = null, out = null, blur = null;
+  try {
+    src = matFromImageData(imageData);
+    rgb = new cv.Mat();
+    cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB, 0);
+    const W = rgb.cols, H = rgb.rows, N = W * H;
+    // হালকা নয়েজ কমানো (ক্যামেরার দানা) — 3×3 median, লেখা অক্ষত
+    cv.medianBlur(rgb, rgb, 3);
+    bg = paperBackground(cv, rgb);
+    const d = rgb.data, b = bg ? bg.data : null;
+
+    // ---- ১. আলো ভাগ: প্রতি চ্যানেল v/bg → কাগজ ≈ 1.0 (0..255 স্কেলে 255)
+    // normalized luminance (0..255, কাগজ=255) রাখি পরের ধাপের জন্য
+    const nr = new Uint8ClampedArray(N * 3);
+    for (let i = 0; i < N * 3; i++) {
+      const bb = b ? b[i] : 255;
+      nr[i] = Math.min(255, (d[i] * 255) / Math.max(1, bb));
+    }
+    const lum = new Uint8ClampedArray(N);
+    for (let i = 0; i < N; i++) lum[i] = (nr[i * 3] * 77 + nr[i * 3 + 1] * 150 + nr[i * 3 + 2] * 29) >> 8;
+
+    const ink = inkLevel(lum, N);              // সাধারণত 40–120
+    const whitePt = (opts && opts.whiten === false) ? 250 : 236;   // এর উপরে = খাঁটি সাদা
+    out = new cv.Mat(H, W, cv.CV_8UC4);
+    const o = out.data;
+
+    if (mode === 'scan') {
+      // ---- সাদা-কালো: থ্রেশহোল্ড কালি ও কাগজের মাঝামাঝি, নরম কিনারা (anti-aliased)
+      let t = 255 - 0.33 * (255 - ink);
+      t = Math.max(165, Math.min(215, t));
+      const soft = 14;
+      for (let i = 0; i < N; i++) {
+        const v = lum[i];
+        let y = (v - (t - soft)) / (2 * soft);
+        y = y <= 0 ? 0 : y >= 1 ? 1 : y * y * (3 - 2 * y);
+        const p = Math.round(y * 255);
+        o[i * 4] = p; o[i * 4 + 1] = p; o[i * 4 + 2] = p; o[i * 4 + 3] = 255;
+      }
+    } else {
+      // ---- লেভেল: blackPt → 0, whitePt → 255, মাঝে gamma (লেখা আরও গাঢ়)
+      const blackPt = Math.max(0, Math.min(90, ink - 25));
+      const lut = new Uint8ClampedArray(256);
+      for (let v = 0; v < 256; v++) {
+        let x = (v - blackPt) / (whitePt - blackPt);
+        x = x <= 0 ? 0 : x >= 1 ? 1 : Math.pow(x, 1.25);
+        lut[v] = Math.round(x * 255);
+      }
+      if (mode === 'grayscale') {
+        for (let i = 0; i < N; i++) {
+          const p = lut[lum[i]];
+          o[i * 4] = p; o[i * 4 + 1] = p; o[i * 4 + 2] = p; o[i * 4 + 3] = 255;
+        }
+      } else {
+        // magic color: উজ্জ্বলতায় লেভেল, রঙ (chroma) রেখে ও একটু বাড়িয়ে
+        const satBoost = 1.25;
+        for (let i = 0; i < N; i++) {
+          const L = lum[i];
+          const Lo = lut[L];
+          const k = L > 0 ? Lo / L : 0;
+          for (let c = 0; c < 3; c++) {
+            const v = nr[i * 3 + c];
+            // রঙের বিচ্যুতি (v-L) বাড়ানো, তারপর নতুন উজ্জ্বলতায় বসানো
+            let y = Lo + (v - L) * satBoost * Math.min(1.6, Math.max(0.6, k));
+            o[i * 4 + c] = y < 0 ? 0 : y > 255 ? 255 : y;
+          }
+          o[i * 4 + 3] = 255;
+        }
+      }
+    }
+    // ---- ধারালো করা (হালকা unsharp, শুধু রঙিন/ধূসরে)
+    if (mode !== 'scan') {
+      blur = new cv.Mat();
+      const sigma = Math.max(0.8, Math.min(W, H) / 1600);
+      cv.GaussianBlur(out, blur, new cv.Size(0, 0), sigma, sigma, cv.BORDER_REPLICATE);
+      const ua = 0.5; cv.addWeighted(out, 1 + ua, blur, -ua, 0, out);
+    }
+    return { width: W, height: H, data: new Uint8ClampedArray(out.data) };
+  } finally {
+    [src, rgb, bg, out, blur].forEach(m => { if (m) m.delete(); });
+  }
+}
+// ================== /ENHANCE v2 ==================
+
 function applyFilter(imageData, filter, opts) {
+  // v2 (কাগজ-মডেল) সব মোডে; পুরোনো পথ শুধু opts.legacyFilters দিলে
+  if (filter !== 'original' && !(opts && opts.legacyFilters)) return enhanceV2(imageData, filter, opts);
   const cv = self.cv;
   if (filter === 'original') return imageData;
   if (filter === 'magic') return magicColor(imageData, opts);
@@ -1406,6 +1652,43 @@ function applyFilter(imageData, filter, opts) {
   }
 }
 
+/**
+ * বাঁক-সংশোধন grid (R×C বিন্দু, পাতার পিক্সেল স্থানাঙ্কে) দিয়ে পূর্ণ মাপে remap।
+ * grid-এর কোণার বিন্দু = আউটপুটের কোণা (corner-aligned bilinear)।
+ */
+function remapGrid(imageData, grid, R, C) {
+  const cv = self.cv;
+  const W = imageData.width, H = imageData.height;
+  let src = null, map = null, dst = null, empty = null;
+  try {
+    src = matFromImageData(imageData);
+    map = new cv.Mat(H, W, cv.CV_32FC2);
+    const m = map.data32F;
+    const sxk = (C - 1) / Math.max(1, W - 1), syk = (R - 1) / Math.max(1, H - 1);
+    for (let y = 0; y < H; y++) {
+      const fy = y * syk;
+      const r0 = Math.min(R - 2, Math.floor(fy)), ty = fy - r0;
+      for (let x = 0; x < W; x++) {
+        const fx = x * sxk;
+        const c0 = Math.min(C - 2, Math.floor(fx)), tx = fx - c0;
+        const i00 = (r0 * C + c0) * 2, i01 = i00 + 2, i10 = i00 + C * 2, i11 = i10 + 2;
+        const o = (y * W + x) * 2;
+        for (let k = 0; k < 2; k++) {
+          const a = grid[i00 + k] * (1 - tx) + grid[i01 + k] * tx;
+          const b = grid[i10 + k] * (1 - tx) + grid[i11 + k] * tx;
+          m[o + k] = a * (1 - ty) + b * ty;
+        }
+      }
+    }
+    dst = new cv.Mat();
+    empty = new cv.Mat();
+    cv.remap(src, dst, map, empty, cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
+    return { width: dst.cols, height: dst.rows, data: new Uint8ClampedArray(dst.data) };
+  } finally {
+    [src, map, dst, empty].forEach(x => { if (x) x.delete(); });
+  }
+}
+
 // ---------- message protocol ----------
 self.onmessage = async (e) => {
   const { id, type, payload } = e.data;
@@ -1422,6 +1705,7 @@ self.onmessage = async (e) => {
     else if (type === 'warp')   result = warp(payload.imageData, payload.corners, payload.opts);
     else if (type === 'filter') result = applyFilter(payload.imageData, payload.filter, payload.opts);
     else if (type === 'sharpness') result = sharpnessScore(payload.imageData);
+    else if (type === 'remapGrid') result = remapGrid(payload.imageData, payload.grid, payload.rows, payload.cols);
     else if (type === 'quadFromMask') result = quadFromMask(payload.mask, payload.size, payload.w, payload.h);
     else throw new Error('Unknown message type: ' + type);
 

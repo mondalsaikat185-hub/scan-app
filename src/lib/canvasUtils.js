@@ -12,7 +12,10 @@ export function scaleCanvas(canvas) {
     const scaled = document.createElement('canvas');
     scaled.width = width;
     scaled.height = height;
-    scaled.getContext('2d').drawImage(canvas, 0, 0, width, height);
+    const ctx = scaled.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';   // বড় ছবি ছোট করার সময় লেখা যেন খাঁজকাটা না হয়
+    ctx.drawImage(canvas, 0, 0, width, height);
     return scaled;
   }
   return canvas;
@@ -48,7 +51,10 @@ export async function downscaleBlob(blob, preset) {
   const h = Math.max(1, Math.round(bmp.height * k));
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
-  c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  const cx = c.getContext('2d');
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = 'high';
+  cx.drawImage(bmp, 0, 0, w, h);
   bmp.close();
 
   // সাদা-কালো স্ক্যান PNG-তেই crisp থাকে; কালার ছবিতে JPEG ছোট হয়

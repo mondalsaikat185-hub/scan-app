@@ -1,0 +1,4 @@
+u2netp.onnx       — U^2-Net (Qin et al.), Apache-2.0
+uvdoc_grid.onnx   — UVDoc: Neural Grid-based Document Unwarping (Verhoeven, Magne, Sorkine-Hornung, ETH Zurich,
+                    SIGGRAPH Asia 2023), Apache-2.0. ONNX grid-output export: huggingface.co/fredcallagan/uvdoc-grid-onnx
+                    (external weights merged into a single file, otherwise unmodified).

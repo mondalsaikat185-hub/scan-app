@@ -73,3 +73,10 @@ export async function filterCanvas(canvas, filter, opts) {
   const res = await call('filter', { imageData: img, filter, opts }, [img.data.buffer]);
   return resultToCanvas(res);
 }
+
+// বাঁক-সংশোধন grid দিয়ে পাতা সোজা করা (worker-এ)
+export async function remapCanvasGrid(canvas, grid, rows, cols) {
+  const img = canvasToImageData(canvas);
+  const res = await call('remapGrid', { imageData: img, grid, rows, cols }, [img.data.buffer]);
+  return resultToCanvas(res);
+}

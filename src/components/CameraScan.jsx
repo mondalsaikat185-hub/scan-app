@@ -3,12 +3,13 @@ import { detectEdges, sharpnessOf } from '../lib/cvClient';
 import './CameraScan.css';
 
 const DETECT_W = 560;        // ডিটেকশন ফ্রেমের প্রস্থ (বেশি = নির্ভুল, কম = দ্রুত)
-const STABLE_FRAMES = 2;     // পরপর ২ ফ্রেম স্থির হলে অটো-ক্যাপচার (দ্রুত রেসপন্স)
+const STABLE_FRAMES = 4;     // পরপর ৪ ফ্রেম স্থির হলে অটো-ক্যাপচার (~০.৫ সেকেন্ড — ফোকাস বসার সময়)
 const STABLE_TOL = 0.05;     // নড়াচড়ার সহনশীল সীমা
 const SMOOTH = 0.5;          // EMA — ওভারলের কাঁপুনি কমায়
 const HISTORY = 3;           // কত ফ্রেমের মধ্যক (median) নেওয়া হবে
 const OUTLIER_TOL = 0.20;    // মধ্যক থেকে এত দূরের ফ্রেম "বিক্ষিপ্ত" ধরে বাদ
-const MIN_SHARPNESS = 20;    // সাধারণ ঘরের মৃদু আলোতেও যেন দ্রুত অটো-ক্যাপচার হয়
+const MIN_SHARPNESS = 18;    // পরম নিম্নসীমা (খুব অন্ধকার ঘরের জন্য)
+const REL_SHARPNESS = 0.70;  // সাম্প্রতিক সেরা ফ্রেমের অন্তত ৭০% ধারালো হলে তবেই ক্যাপচার
 
 // কয়েক ফ্রেমের কোণার মধ্যক (median) — একটা-দুটো ভুল ফ্রেম ফেলে দেয়।
 // গড়ের চেয়ে মধ্যক অনেক বেশি নির্ভরযোগ্য: একটা ফ্রেম বাজেভাবে ভুল হলেও ফল নড়ে না।
@@ -98,6 +99,7 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
   const sharpCheckRef = useRef(false);
   const blurCountRef = useRef(0);
   const capturingRef = useRef(false);
+  const sharpHistRef = useRef([]);   // সাম্প্রতিক ধারালোতার মান
   const [err, setErr] = useState(null);
   const [stablePct, setStablePct] = useState(0);
   const [hint, setHint] = useState('কাগজ ফ্রেমে আনুন');
@@ -144,7 +146,14 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       const track = streamRef.current && streamRef.current.getVideoTracks()[0];
       if (track && typeof window.ImageCapture === 'function') {
         const ic = new window.ImageCapture(track);
-        const blob = await ic.takePhoto();
+        let settings;
+        try {
+          const caps = await ic.getPhotoCapabilities();
+          if (caps && caps.imageWidth && caps.imageWidth.max) {
+            settings = { imageWidth: caps.imageWidth.max, imageHeight: caps.imageHeight && caps.imageHeight.max };
+          }
+        } catch { /* ignore */ }
+        const blob = await ic.takePhoto(settings);
         const bmp = await createImageBitmap(blob);
         const c = document.createElement('canvas');
         c.width = bmp.width; c.height = bmp.height;
@@ -160,14 +169,15 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
     let usedPhoto = !!full;
     if (!full) full = grabVideoFrame();
 
-    // ---- কোণা নিখুঁত স্কেলিং ----
-    // প্রিভিউ ফ্রেমের ডিটেক্ট করা ৪-কোণা সরাসরি ফুল-রেজোলিউশন স্থিরচিত্রে রূপান্তর করা
-    let corners = null;
-    if (quadSmall) {
-      const kX = full.width / detectW;
-      const kY = full.height / detectH;
-      corners = quadSmall.map(p => ({ x: p.x * kX, y: p.y * kY }));
-    }
+    // ---- কোণা ----
+    // প্রিভিউর কোণা আর ব্যবহার করি না। কারণ:
+    //  ১. প্রিভিউ-ভিডিও (প্রায়ই ১৬:৯) আর আসল ছবি (প্রায়ই ৪:৩) এক ফ্রেম নয় —
+    //     x, y আলাদা অনুপাতে টেনে বসালে ক্রপ বেঁকে যেত (আগের বাগ)।
+    //  ২. প্রিভিউর দ্রুত (ছোট মাপের) ডিটেকশন ছায়ার ধারকে কাগজের ধার ভেবে
+    //     ভুল করতে পারে; পুরো-রেজোলিউশন ছবিতে AI (U²-Net) পরীক্ষায় নির্ভুল।
+    // তাই null পাঠাই — App পুরো ছবিতে নতুন করে কোণা খুঁজবে।
+    void quadSmall; void usedPhoto; void detectW; void detectH;
+    const corners = null;
 
     onCaptured(full, corners);   // App এটাকে crop স্ক্রিনে পাঠাবে
   }, [onCaptured]);
@@ -186,6 +196,16 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
         });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
+        // অটো-ফোকাস ও এক্সপোজার চালু রাখা (যেখানে সাপোর্ট করে)
+        try {
+          const tr = stream.getVideoTracks()[0];
+          const caps = tr.getCapabilities ? tr.getCapabilities() : {};
+          const adv = {};
+          if (caps.focusMode && caps.focusMode.includes('continuous')) adv.focusMode = 'continuous';
+          if (caps.exposureMode && caps.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+          if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+          if (Object.keys(adv).length) await tr.applyConstraints({ advanced: [adv] });
+        } catch { /* ignore */ }
         const video = videoRef.current;
         video.srcObject = stream;
         await video.play();
@@ -298,7 +318,12 @@ export default function CameraScan({ onCaptured, onFallback, onCancel }) {
       const dc = detectCanvasRef.current;
       const score = await sharpnessOf(dc);
       if (capturingRef.current) return;
-      if (score < MIN_SHARPNESS) {
+      const hist = sharpHistRef.current;
+      hist.push({ t: Date.now(), s: score });
+      while (hist.length && Date.now() - hist[0].t > 2500) hist.shift();
+      const recentBest = Math.max(...hist.map(h => h.s));
+      // প্রথম কয়েকটা মাপ জমা না হলে অপেক্ষা — নাহলে তুলনা করার কিছু নেই
+      if (hist.length < 3 || score < MIN_SHARPNESS || score < recentBest * REL_SHARPNESS) {
         blurCountRef.current++;
         stableCountRef.current = Math.max(0, STABLE_FRAMES - 2);
         setHint('একটু ঝাপসা — স্থির ধরুন');

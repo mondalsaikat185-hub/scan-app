@@ -39,8 +39,16 @@ export default function ResultView({ warpedCanvas, onBack, onDiscard, onAddPage,
     const maxHeight = containerRef.current.clientHeight - 150; 
     const scale = Math.min(maxWidth / finalCanvas.width, maxHeight / finalCanvas.height, 1);
     
-    canvas.width = finalCanvas.width * scale;
-    canvas.height = finalCanvas.height * scale;
+    // ফোনের স্ক্রিন ২-৩ গুণ ঘন (devicePixelRatio) — সেই অনুপাতে আঁকলে প্রিভিউ
+    // ঝাপসা/খাঁজকাটা দেখায় না (আগে CSS-মাপে আঁকায় ভালো স্ক্যানও খারাপ দেখাত)
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const cssW = Math.round(finalCanvas.width * scale), cssH = Math.round(finalCanvas.height * scale);
+    canvas.width = Math.min(finalCanvas.width, Math.round(cssW * dpr));
+    canvas.height = Math.min(finalCanvas.height, Math.round(cssH * dpr));
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(finalCanvas, 0, 0, canvas.width, canvas.height);
     
   }, [finalCanvas]);

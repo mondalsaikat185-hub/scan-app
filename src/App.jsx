@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { initCV, detectEdges, warpCanvas, quadFromMask } from './lib/cvClient';
+import { initCV, detectEdges, warpCanvas, quadFromMask, remapCanvasGrid } from './lib/cvClient';
+import { estimateDewarp } from './lib/dewarp';
 import { segmentDocument, isAIEnabled, setAIEnabled, isModelAvailable } from './lib/aiDetect';
 import { getAllDocuments, saveDocument, deleteDocument } from './lib/db';
 import { makePdfFromPages } from './lib/makePdf';
@@ -183,7 +184,14 @@ function App() {
     setBusy(true);
     setLastCorners(finalCorners);
     try {
-      const warped = await warpCanvas(imageCanvas, finalCorners, corrections);
+      let warped = await warpCanvas(imageCanvas, finalCorners, corrections);
+      // কুঁচকানো/বাঁকা পাতা হলে AI দিয়ে লাইন সোজা (সমতল হলে estimateDewarp null দেয়)
+      if (corrections.dewarp !== false) {
+        try {
+          const dw = await estimateDewarp(warped);
+          if (dw) warped = await remapCanvasGrid(warped, dw.grid, dw.rows, dw.cols);
+        } catch (e) { console.warn('dewarp skipped', e); }
+      }
       setWarpedCanvas(warped);
       setStep('enhance');
     } catch (err) {
@@ -390,16 +398,11 @@ function App() {
         <CameraScan
           onCaptured={async (canvas, corners) => {
             const scaled = scaleCanvas(canvas);
-            setImageCanvas(scaled);
-            if (corners) {
-              // ক্যানভাস রিসাইজ হলে কোণাগুলোও একই অনুপাতে সরাতে হবে,
-              // নাহলে ক্রপ বক্স ভুল জায়গায় বসবে
-              const k = scaled.width / canvas.width;
-              setInitialCorners(k === 1 ? corners : corners.map(p => ({ x: p.x * k, y: p.y * k })));
-              setStep('crop');
-            } else {
-              await startCropFor(scaled);
-            }
+            const k = scaled.width / canvas.width;
+            // কোণা থাকলে স্কেল মিলিয়ে দিই; না থাকলে startCropFor নিজেই
+            // পুরো-রেজোলিউশন ছবিতে AI → OpenCV দিয়ে খুঁজবে
+            const preset = corners ? corners.map(p => ({ x: p.x * k, y: p.y * k })) : null;
+            await startCropFor(scaled, preset);
           }}
           onFallback={() => setStep('input')}
           onCancel={handleCancelScan}
