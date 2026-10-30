@@ -14,7 +14,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = { checks: {}, notes: [] };
 const check = (name, ok, detail) => { report.checks[name] = { ok: !!ok, detail }; console.log(ok ? 'PASS' : 'FAIL', name, detail ?? ''); };
 const screencap = (name) => { try { sh(`adb exec-out screencap -p > ${OUT}/${name}.png`, { shell: '/bin/bash' }); } catch (e) { report.notes.push('screencap ' + name + ' failed'); } };
-const topActivity = () => { try { return sh(`adb shell dumpsys activity activities | grep -m1 -E "mResumedActivity|topResumedActivity"`, { shell: '/bin/bash' }); } catch { return ''; } };
+// যে জানালায় এখন ফোকাস (স্ক্যানার খুললে সেটা Google-এর জানালা হবে)
+const topActivity = () => { try { return sh(`adb shell dumpsys window | grep -m1 -E "mCurrentFocus"`, { shell: '/bin/bash' }); } catch { return ''; } };
 
 // ---- tiny CDP client (Node 22 has a global WebSocket) ----
 async function cdpConnect() {
@@ -104,14 +105,19 @@ try {
   for (let i = 0; i < 25; i++) {
     await sleep(1000);
     const top = topActivity();
-    if (top && !top.includes(PKG + '/')) { scannerOpened = true; outcome = top; break; }
-    const ui = await ev("({ processing: /Processing…/.test(document.body.innerText), step: document.querySelector('.image-input-container') ? 'input' : document.querySelector('.lib-fab') ? 'library' : 'other' })").catch(() => null);
-    if (ui && ui.step === 'input') { outcome = 'fell back to classic flow (scanner unavailable)'; break; }
+    if (top && /gms|mlkit|documentscanner/i.test(top)) { scannerOpened = true; outcome = top; break; }
+    const ui = await ev("({ processing: /Processing…/.test(document.body.innerText), step: document.querySelector('.image-input-container') ? 'input' : document.querySelector('.lib-fab') ? 'library' : 'other', notice: (document.querySelector('.app-notice') || {}).innerText || '' })").catch(() => null);
+    if (ui && ui.step === 'input') { outcome = 'fell back to classic flow; notice=' + ui.notice; report.fallbackNotice = ui.notice; break; }
     if (i === 24) { hung = true; outcome = JSON.stringify(ui) + ' top=' + top; }
   }
   screencap('02_after_plus');
   check('plus_does_not_hang', !hung, outcome);
   report.scannerOpened = scannerOpened;
+  // ফলব্যাক হলে: পুরোনো পদ্ধতিও যেন সত্যিই চলে — গ্যালারি-ইনপুট পর্দা ও ইঞ্জিন প্রস্তুত
+  if (!scannerOpened && report.fallbackNotice !== undefined) {
+    const fb = await ev("({ hasUpload: !!document.querySelector('input[type=file]'), processing: /Processing…/.test(document.body.innerText) })").catch(() => ({}));
+    check('fallback_flow_ready', fb.hasUpload && !fb.processing, JSON.stringify(fb));
+  }
   if (!scannerOpened) report.notes.push('Google scanner did not open in the emulator: ' + outcome);
 
   // ---- 5. Back from scanner returns to the app (no stuck overlay) ----
@@ -120,8 +126,8 @@ try {
     screencap('03_scanner');
     sh('adb shell input keyevent KEYCODE_BACK'); await sleep(1500);
     // the scanner may ask "discard?" — press back again
-    if (!topActivity().includes(PKG + '/')) { sh('adb shell input keyevent KEYCODE_BACK'); await sleep(1500); }
-    const back = topActivity().includes(PKG + '/');
+    if (/gms|mlkit/i.test(topActivity())) { sh('adb shell input keyevent KEYCODE_BACK'); await sleep(1500); }
+    const back = topActivity().includes(PKG);
     await sleep(2000);
     const ui = await ev("({ processing: /Processing…/.test(document.body.innerText), library: !!document.querySelector('.lib-fab') })").catch(() => ({}));
     screencap('04_after_back');

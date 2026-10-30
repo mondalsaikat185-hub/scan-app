@@ -26,6 +26,7 @@ function App() {
   const [cvReady, setCvReady] = useState(false);
   const [cvError, setCvError] = useState(false);
   const [appReady, setAppReady] = useState(false);   // UI দেখানো যাবে কিনা
+  const [notice, setNotice] = useState(null);        // উপরে ভেসে থাকা বার্তা (alert-এর বদলে — অ্যাপ আটকায় না)
   
   // State machine: 'library' -> 'input' -> 'crop' -> 'enhance' -> 'pages'
   const [step, setStep] = useState('library');
@@ -107,8 +108,10 @@ function App() {
     const res = await scanWithMLKit();
     if (res.status === 'unavailable') {
       console.warn('ML Kit unavailable:', res.reason);
-      alert('Google স্ক্যানার খোলা গেল না (' + res.reason + ')।\nএবারের মতো পুরোনো পদ্ধতিতে স্ক্যান হবে। ' +
-            'ফোনে ইন্টারনেট চালু রেখে কিছুক্ষণ পরে আবার চেষ্টা করলে সাধারণত Google স্ক্যানার নেমে যায়।');
+      const playOld = /not available in the current version of the Google Play services/i.test(res.reason);
+      setNotice(playOld
+        ? 'Google স্ক্যানার চালাতে ফোনের "Google Play services" আপডেট লাগবে (Play Store → Google Play services → Update)। এবারের মতো পুরোনো পদ্ধতিতে স্ক্যান হবে।'
+        : 'Google স্ক্যানার খোলা গেল না (' + res.reason + ')। এবারের মতো পুরোনো পদ্ধতিতে স্ক্যান হবে; ইন্টারনেট চালু রেখে পরে আবার চেষ্টা করুন।');
       try { await ensureCV(); } catch { alert('ইঞ্জিন লোড হলো না।'); return; }
       setStep('input');
       return;
@@ -414,6 +417,15 @@ function App() {
 
   return (
     <div className="app-container">
+      {notice && (
+        <div className="app-notice" role="status"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1000, background: '#fef3c7', color: '#78350f',
+                   padding: '12px 44px 12px 14px', fontSize: 14, lineHeight: 1.5, boxShadow: '0 2px 8px rgba(0,0,0,.3)' }}>
+          {notice}
+          <button onClick={() => setNotice(null)} aria-label="বন্ধ"
+            style={{ position: 'absolute', right: 8, top: 8, border: 0, background: 'transparent', fontSize: 20, color: '#78350f' }}>✕</button>
+        </div>
+      )}
       {step === 'library' && (
         <Library 
           docs={docs} 
