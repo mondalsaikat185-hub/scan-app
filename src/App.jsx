@@ -186,7 +186,7 @@ function App() {
     try {
       let warped = await warpCanvas(imageCanvas, finalCorners, corrections);
       // কুঁচকানো/বাঁকা পাতা হলে AI দিয়ে লাইন সোজা (সমতল হলে estimateDewarp null দেয়)
-      if (corrections.dewarp !== false) {
+      if (corrections.dewarpAI === true) {
         try {
           const dw = await estimateDewarp(warped);
           if (dw) warped = await remapCanvasGrid(warped, dw.grid, dw.rows, dw.cols);
