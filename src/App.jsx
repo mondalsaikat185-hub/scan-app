@@ -7,6 +7,7 @@ import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
 import { savePdfBlob, canPickLocation } from './lib/saveFile';
 import { loadCorrections, saveCorrections } from './lib/settings';
+import { isNativeApp, scanWithMLKit, blobSize } from './lib/nativeScan';
 
 import Loader from './components/Loader';
 import ImageInput from './components/ImageInput';
@@ -74,14 +75,38 @@ function App() {
 
   // --- Library Actions ---
   const handleNewScan = () => {
-    setWorkingDoc({
+    const doc = {
       id: crypto.randomUUID(),
       name: `Scan ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       pages: []
-    });
-    setStep('input');
+    };
+    setWorkingDoc(doc);
+    startScan(doc);
+  };
+
+  // স্ক্যান শুরু: Android অ্যাপে Google ML Kit স্ক্যানার, ওয়েবসাইটে আগের পদ্ধতি
+  const startScan = async (doc) => {
+    if (!isNativeApp()) { setStep('input'); return; }
+    setBusy(true);
+    let blobs = null;
+    try { blobs = await scanWithMLKit(); } finally { setBusy(false); }
+    if (blobs === null) { setStep('input'); return; }        // স্ক্যানার পাওয়া যায়নি → পুরোনো পদ্ধতি
+    const base = doc || workingDoc;
+    if (blobs.length === 0) {                                  // বাতিল
+      if (base.pages.length > 0) setStep('pages');
+      else { setWorkingDoc(null); setStep('library'); }
+      return;
+    }
+    const newPages = [];
+    for (const b of blobs) {
+      const { width, height } = await blobSize(b);
+      // ML Kit আগেই ক্রপ+ফিল্টার করেছে; আসল হিসেবেও এটাই রাখি (এডিট করলে এখান থেকে)
+      newPages.push({ id: crypto.randomUUID(), blob: b, filter: 'original', rotation: 0, width, height, originalBlob: b, corners: null });
+    }
+    setWorkingDoc({ ...base, pages: [...base.pages, ...newPages], updatedAt: Date.now() });
+    setStep('pages');
   };
 
   const handleOpenDoc = (doc) => {
@@ -438,7 +463,7 @@ function App() {
         <PageReview 
           workingDoc={workingDoc}
           onUpdateDoc={handleUpdateDoc}
-          onAddPage={() => setStep('input')}
+          onAddPage={() => startScan()}
           onEditPage={handleEditPage}
           onRotatePage={handleRotatePage}
           onSave={handleSaveDoc}
@@ -465,7 +490,7 @@ function App() {
         />
       )}
 
-      <InstallPrompt />
+      {!isNativeApp() && <InstallPrompt />}
     </div>
   );
 }

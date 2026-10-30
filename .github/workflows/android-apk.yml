@@ -1,0 +1,65 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install & build web app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Slim web assets for the APK
+        # APK-তে ML Kit স্ক্যান করে; ভারী AI ফাইলগুলোর শুধু যেটা ব্যাকআপে লাগে সেটুকু রাখি
+        run: |
+          rm -f dist/models/uvdoc_grid.onnx
+          find dist/ort -type f ! -name 'ort-wasm-simd-threaded.jsep.mjs' ! -name 'ort-wasm-simd-threaded.jsep.wasm' -delete
+          du -sh dist
+
+      - name: Capacitor sync
+        run: npx cap sync android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          mkdir -p ../out
+          cp app/build/outputs/apk/debug/app-debug.apk ../out/ScanApp.apk
+          ls -la ../out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScanApp-apk
+          path: out/ScanApp.apk
+
+      - name: Publish to the "apk-latest" release (fixed download link)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Scan App — latest Android APK
+          body: |
+            Latest Android build (run ${{ github.run_number }}, commit ${{ github.sha }}).
+            Scanning uses Google ML Kit Document Scanner on the phone.
+          files: out/ScanApp.apk
+          make_latest: true
