@@ -38,14 +38,19 @@ async function cdpConnect() {
   };
   const send = (method, params = {}) => new Promise((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
   await send('Runtime.enable');
-  const evaluate = async (expression) => {
-    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  // সময়সীমাসহ: অন্য পর্দা (স্ক্যানার) খোলা থাকলে WebView থেমে থাকে, তখন উত্তর আসে না
+  const evaluate = async (expression, ms = 8000) => {
+    const r = await Promise.race([
+      send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+      sleep(ms).then(() => { throw new Error('evaluate timeout'); }),
+    ]);
     if (r.result && r.result.exceptionDetails) throw new Error('eval: ' + JSON.stringify(r.result.exceptionDetails).slice(0, 300));
     return r.result && r.result.result ? r.result.result.value : undefined;
   };
   return { url: target.url, evaluate, logs, close: () => ws.close() };
 }
 
+const keepAlive = setInterval(() => {}, 1000);   // Node যেন মাঝপথে বেরিয়ে না যায়
 let cdp;
 try {
   sh(`adb install -r ${process.argv[2] || 'out/ScanApp.apk'}`);
@@ -93,7 +98,8 @@ try {
   check('read_scanned_file', fileRes.ok && fileRes.size > 100, JSON.stringify(fileRes));
 
   // ---- 4. "+" opens Google scanner, or fails cleanly within the watchdog ----
-  await ev("document.querySelector('.lib-fab').click()");
+  // ক্লিক পরে ঘটুক — নইলে স্ক্যানার খুলে WebView থেমে গেলে উত্তরই আসে না
+  await ev("setTimeout(() => document.querySelector('.lib-fab').click(), 200), true");
   let scannerOpened = false, hung = false, outcome = '';
   for (let i = 0; i < 25; i++) {
     await sleep(1000);
@@ -129,6 +135,7 @@ try {
   try { writeFileSync(`${OUT}/logcat.txt`, sh(`adb logcat -d -v time | grep -E -i "Capacitor|chromium|DocumentScanner|AndroidRuntime|mlkit|${PKG}" | tail -400`, { shell: '/bin/bash', maxBuffer: 1 << 26 })); } catch { /* ignore */ }
   writeFileSync(`${OUT}/report.json`, JSON.stringify(report, null, 2));
   if (cdp) cdp.close();
+  clearInterval(keepAlive);
   const failed = Object.entries(report.checks).filter(([, v]) => !v.ok).map(([k]) => k);
   console.log('FAILED:', failed.join(', ') || 'none');
   process.exit(report.error || failed.length ? 1 : 0);
