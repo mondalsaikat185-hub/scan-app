@@ -7,7 +7,7 @@ import { makePdfFromPages } from './lib/makePdf';
 import { sharePdf } from './lib/share';
 import { savePdfBlob, canPickLocation } from './lib/saveFile';
 import { loadCorrections, saveCorrections } from './lib/settings';
-import { isNativeApp, scanWithMLKit, blobSize } from './lib/nativeScan';
+import { isNativeApp, scanWithMLKit, blobSize, checkShellUpdate } from './lib/nativeScan';
 
 import Loader from './components/Loader';
 import ImageInput from './components/ImageInput';
@@ -25,6 +25,7 @@ import './App.css';
 function App() {
   const [cvReady, setCvReady] = useState(false);
   const [cvError, setCvError] = useState(false);
+  const [appReady, setAppReady] = useState(false);   // UI দেখানো যাবে কিনা
   
   // State machine: 'library' -> 'input' -> 'crop' -> 'enhance' -> 'pages'
   const [step, setStep] = useState('library');
@@ -52,13 +53,18 @@ function App() {
   const [corrections, setCorrections] = useState(loadCorrections());  // কোন অটো-সংশোধন চলবে
 
   useEffect(() => {
-    // Load OpenCV via Web Worker
-    initCV()
-      .then(() => setCvReady(true))
-      .catch((err) => {
-        console.error(err);
-        setCvError(true);
-      });
+    // Load OpenCV via Web Worker — Android অ্যাপে শুরুতে নয় (দরকার হলে ensureCV)
+    if (isNativeApp()) {
+      setAppReady(true);
+      checkShellUpdate();
+    } else {
+      initCV()
+        .then(() => { setCvReady(true); setAppReady(true); })
+        .catch((err) => {
+          console.error(err);
+          setCvError(true);
+        });
+    }
       
     // Load documents
     refreshLibrary();
@@ -86,27 +92,45 @@ function App() {
     startScan(doc);
   };
 
+  // OpenCV ইঞ্জিন দরকার হলে তবেই চালু (Android অ্যাপে স্ক্যান ML Kit করে, তাই শুরুতে লাগে না)
+  const ensureCV = async () => {
+    if (cvReady) return;
+    setBusy(true);
+    try { await initCV(); setCvReady(true); } finally { setBusy(false); }
+  };
+
   // স্ক্যান শুরু: Android অ্যাপে Google ML Kit স্ক্যানার, ওয়েবসাইটে আগের পদ্ধতি
   const startScan = async (doc) => {
-    if (!isNativeApp()) { setStep('input'); return; }
-    setBusy(true);
-    let blobs = null;
-    try { blobs = await scanWithMLKit(); } finally { setBusy(false); }
-    if (blobs === null) { setStep('input'); return; }        // স্ক্যানার পাওয়া যায়নি → পুরোনো পদ্ধতি
     const base = doc || workingDoc;
-    if (blobs.length === 0) {                                  // বাতিল
+    if (!isNativeApp()) { setStep('input'); return; }
+    // স্ক্যানার খোলা থাকাকালীন "Processing…" দেখাই না — ওটা আলাদা পর্দা
+    const res = await scanWithMLKit();
+    if (res.status === 'unavailable') {
+      console.warn('ML Kit unavailable:', res.reason);
+      alert('Google স্ক্যানার খোলা গেল না (' + res.reason + ')।\nএবারের মতো পুরোনো পদ্ধতিতে স্ক্যান হবে। ' +
+            'ফোনে ইন্টারনেট চালু রেখে কিছুক্ষণ পরে আবার চেষ্টা করলে সাধারণত Google স্ক্যানার নেমে যায়।');
+      try { await ensureCV(); } catch { alert('ইঞ্জিন লোড হলো না।'); return; }
+      setStep('input');
+      return;
+    }
+    if (res.status === 'cancel') {
       if (base.pages.length > 0) setStep('pages');
       else { setWorkingDoc(null); setStep('library'); }
       return;
     }
-    const newPages = [];
-    for (const b of blobs) {
-      const { width, height } = await blobSize(b);
-      // ML Kit আগেই ক্রপ+ফিল্টার করেছে; আসল হিসেবেও এটাই রাখি (এডিট করলে এখান থেকে)
-      newPages.push({ id: crypto.randomUUID(), blob: b, filter: 'original', rotation: 0, width, height, originalBlob: b, corners: null });
+    setBusy(true);
+    try {
+      const newPages = [];
+      for (const b of res.blobs) {
+        const { width, height } = await blobSize(b);
+        // ML Kit আগেই ক্রপ+ফিল্টার করেছে; আসল হিসেবেও এটাই রাখি (এডিট করলে এখান থেকে)
+        newPages.push({ id: crypto.randomUUID(), blob: b, filter: 'original', rotation: 0, width, height, originalBlob: b, corners: null });
+      }
+      setWorkingDoc({ ...base, pages: [...base.pages, ...newPages], updatedAt: Date.now() });
+      setStep('pages');
+    } finally {
+      setBusy(false);
     }
-    setWorkingDoc({ ...base, pages: [...base.pages, ...newPages], updatedAt: Date.now() });
-    setStep('pages');
   };
 
   const handleOpenDoc = (doc) => {
@@ -314,6 +338,7 @@ function App() {
       alert('এই পেজটি পুরোনো সংস্করণে তৈরি, তাই আসল ছবি সংরক্ষিত নেই। নতুন করে স্ক্যান করুন।');
       return;
     }
+    try { await ensureCV(); } catch { alert('ইঞ্জিন লোড হলো না।'); return; }
     setBusy(true);
     try {
       const canvas = await blobToCanvas(page.originalBlob);
@@ -383,7 +408,7 @@ function App() {
     );
   }
 
-  if (!cvReady) {
+  if (!appReady) {
     return <Loader message="ইঞ্জিন প্রস্তুত হচ্ছে… প্রথমবার ~12MB ডাউনলোড হচ্ছে, একটু সময় লাগতে পারে।" />;
   }
 

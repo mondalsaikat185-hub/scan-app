@@ -2,7 +2,8 @@
   "appId": "in.sanvitools.scan",
   "appName": "Scan App",
   "webDir": "dist",
-  "android": {
-    "allowMixedContent": false
+  "server": {
+    "url": "https://scan.sanvitools.in",
+    "errorPath": "offline.html"
   }
 }
